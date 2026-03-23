@@ -13,60 +13,36 @@ const ensureIds = (node: MindMapNode): MindMapNode => {
   return newNode;
 };
 
-const initialData: MindMapNode = {
-  title: "Lançamento de Produto",
-  content: "Plano estratégico para o **Q3 2026**.\n- Foco em conversão\n- Retenção de clientes",
+const simpleInitialData: MindMapNode = {
+  title: "Nova Ideia",
+  content: "Comece a digitar aqui...",
   color: "#6366f1",
   textColor: "#ffffff",
-  children: [
-    {
-      title: "Marketing",
-      content: "Campanhas de aquisição e *branding*.",
-      color: "#ec4899",
-      textColor: "#ffffff",
-      children: [
-        { title: "Redes Sociais", content: "Instagram, LinkedIn e TikTok." },
-        { title: "E-mail Marketing" },
-        { title: "Anúncios Pagos" }
-      ]
-    },
-    {
-      title: "Desenvolvimento",
-      color: "#10b981",
-      textColor: "#ffffff",
-      children: [
-        { 
-          title: "Frontend",
-          content: "React, Tailwind e **Framer Motion**.",
-          children: [
-            { title: "Landing Page" },
-            { title: "Dashboard" }
-          ]
-        },
-        { title: "Backend" }
-      ]
-    },
-    {
-      title: "Operações",
-      color: "#f59e0b",
-      textColor: "#ffffff",
-      children: [
-        { title: "Suporte" },
-        { title: "Logística" }
-      ]
-    }
-  ]
 };
 
-const initialDataWithIds = ensureIds(initialData);
-
 export default function App() {
-  const [jsonInput, setJsonInput] = useState(JSON.stringify(initialDataWithIds, null, 2));
-  const [mindMapData, setMindMapData] = useState<MindMapNode>(initialDataWithIds);
+  const [mindMapData, setMindMapData] = useState<MindMapNode>(() => {
+    const cached = localStorage.getItem('mindflow-data');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        return ensureIds(parsed);
+      } catch (e) {
+        console.error('Error parsing cached data', e);
+      }
+    }
+    return ensureIds(simpleInitialData);
+  });
+
+  const [jsonInput, setJsonInput] = useState(() => JSON.stringify(mindMapData, null, 2));
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'viewer' | 'edit-map' | 'editor'>('viewer');
   const [isHelpOpen, setIsHelpOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    localStorage.setItem('mindflow-data', JSON.stringify(mindMapData));
+  }, [mindMapData]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');

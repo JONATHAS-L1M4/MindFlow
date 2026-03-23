@@ -40,6 +40,17 @@ const removeNode = (root: MindMapNode, id: string): boolean => {
   return false;
 };
 
+const getContrastColor = (hexColor: string): string => {
+  const hex = hexColor.replace('#', '');
+  if (hex.length !== 6 && hex.length !== 3) return '#000000';
+  const fullHex = hex.length === 3 ? hex.split('').map(c => c + c).join('') : hex;
+  const r = parseInt(fullHex.substr(0, 2), 16);
+  const g = parseInt(fullHex.substr(2, 2), 16);
+  const b = parseInt(fullHex.substr(4, 2), 16);
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return luminance > 0.6 ? '#1f2937' : '#ffffff';
+};
+
 // ─── Palette ──────────────────────────────────────────────────────────────────
 
 const BRANCH_COLORS = [
@@ -481,15 +492,6 @@ const MindMap: React.FC<MindMapProps> = ({
 
   const chrome = { background: t.chromeBg, border: `1px solid ${t.chromeBorder}` };
 
-  const ChromeBtn: React.FC<{ onClick: () => void; title?: string; children: React.ReactNode }> = ({ onClick, title: ttl, children }) => (
-    <button
-      onClick={onClick} title={ttl}
-      style={{ padding: 8, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.chromeColor, transition: 'background 0.12s' }}
-      onMouseEnter={e => { e.currentTarget.style.background = t.chromeHover; }}
-      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-    >{children}</button>
-  );
-
   // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
@@ -572,23 +574,21 @@ const MindMap: React.FC<MindMapProps> = ({
 
                 if (isRoot) {
                   bg = customColor ?? t.rootBg;
-                  // If a custom color is set, always use white text (like depth-1 nodes).
-                  // In dark mode with no custom color the root is white → dark text.
-                  textColor = customColor ? '#FFFFFF' : t.rootText;
+                  textColor = customColor ? getContrastColor(customColor) : t.rootText;
                   nodeBorder = 'none';
                   nodeShadow = isSelected ? 'none' : (customColor ? `0 6px 24px ${customColor}55` : t.rootShadow);
                 } else if (node.depth === 1) {
                   bg = customColor ?? baseBranchColor ?? '#7B61FF';
-                  textColor = '#FFFFFF'; nodeBorder = 'none';
-                  // FIX: no shadow when selected
+                  textColor = getContrastColor(bg);
+                  nodeBorder = 'none';
                   nodeShadow = isSelected ? 'none' : `0 4px 16px ${bg}55`;
                 } else {
-                  bg = t.leafBg; textColor = t.leafText;
+                  bg = customColor ?? t.leafBg; 
+                  textColor = customColor ? getContrastColor(customColor) : t.leafText;
                   const borderColor = isDark
                     ? (resolvedAccent ? resolvedAccent + 'AA' : '#3A3A42')
                     : (resolvedAccent ?? '#D1CEC7');
-                  nodeBorder = `2px solid ${borderColor}`;
-                  // FIX: no shadow when selected
+                  nodeBorder = customColor ? 'none' : `2px solid ${borderColor}`;
                   nodeShadow = isSelected ? 'none' : t.leafShadow;
                 }
 
@@ -597,7 +597,7 @@ const MindMap: React.FC<MindMapProps> = ({
                 const py = isRoot ? 11 : 8;
 
                 // TRUE when node bg is dark/coloured → light text; used for outline color on edit
-                const hasLightText = node.depth === 1 || (isRoot && !isDark) || (isRoot && !!customColor);
+                const hasLightText = textColor === '#ffffff' || textColor.toLowerCase() === '#fff';
 
                 return (
                   <motion.g
@@ -771,9 +771,7 @@ const MindMap: React.FC<MindMapProps> = ({
                   background: t.chromeBg,
                   border: `1px solid ${t.chromeBorder}`,
                   borderRadius: 20,
-                  boxShadow: isDark
-                    ? '0 32px 80px rgba(0,0,0,0.75), 0 4px 20px rgba(0,0,0,0.5)'
-                    : '0 32px 80px rgba(0,0,0,0.20), 0 4px 20px rgba(0,0,0,0.08)',
+                  boxShadow: 'none',
                   padding: '24px',
                   display: 'flex',
                   flexDirection: 'column',
@@ -907,13 +905,23 @@ const MindMap: React.FC<MindMapProps> = ({
       </AnimatePresence>
 
       {/* Controls (bottom-right) */}
-      <div style={{ position: 'absolute', bottom: 20, right: 20, display: 'flex', flexDirection: 'column', gap: 6, zIndex: 20 }}>
+      <div data-interactive="true" style={{ position: 'absolute', bottom: 20, right: 20, display: 'flex', flexDirection: 'column', gap: 6, zIndex: 20 }}>
 
         {/* Zoom */}
         <div style={{ ...chrome, borderRadius: 10, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          <ChromeBtn onClick={() => setZoom(z => Math.min(z * 1.2, 5))}><ZoomIn size={15} /></ChromeBtn>
+          <button
+            onClick={() => setZoom(z => Math.min(z * 1.2, 5))}
+            style={{ padding: 8, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.chromeColor, transition: 'background 0.12s' }}
+            onMouseEnter={e => { e.currentTarget.style.background = t.chromeHover; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+          ><ZoomIn size={15} /></button>
           <div style={{ height: 1, background: t.chromeDivider }} />
-          <ChromeBtn onClick={() => setZoom(z => Math.max(z * 0.83, 0.08))}><ZoomOut size={15} /></ChromeBtn>
+          <button
+            onClick={() => setZoom(z => Math.max(z * 0.83, 0.08))}
+            style={{ padding: 8, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.chromeColor, transition: 'background 0.12s' }}
+            onMouseEnter={e => { e.currentTarget.style.background = t.chromeHover; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+          ><ZoomOut size={15} /></button>
         </div>
 
         {/* Reset */}
