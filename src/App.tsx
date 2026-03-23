@@ -288,22 +288,27 @@ export default function App() {
               </button>
             </div>
             <div className="p-6 overflow-y-auto max-h-[70vh] text-zinc-700 dark:text-zinc-300 space-y-4">
-              <p>O mapa mental é construído usando uma estrutura de árvore em JSON. Cada item é chamado de "nó" (node).</p>
-              <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 mt-4">Propriedades de um Nó:</h3>
+              <p>O mapa mental usa uma estrutura de árvore em JSON. Comece com um objeto raiz e adicione os demais nós em <code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">children</code>.</p>
+              <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 mt-4">Campos aceitos:</h3>
               <ul className="list-disc pl-5 space-y-2">
-                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">title</code> (Obrigatório): O texto que aparecerá no nó.</li>
-                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">content</code> (Opcional): Texto descritivo em formato Markdown.</li>
-                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">children</code> (Opcional): Uma lista (array) de outros nós que ficarão abaixo deste.</li>
-                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">color</code> (Opcional): Cor de fundo do nó (ex: "#ff0000" ou "red").</li>
-                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">textColor</code> (Opcional): Cor do texto do nó (ex: "#ffffff").</li>
+                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">title</code> (obrigatório): texto exibido no nó.</li>
+                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">content</code> (opcional): descrição em Markdown.</li>
+                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">children</code> (opcional): lista de filhos desse nó.</li>
+                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">color</code> (opcional): na raiz define a cor principal; no primeiro nível define a cor da ramificação.</li>
+                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">id</code> (opcional): pode ser omitido. O app gera IDs automaticamente ao importar ou atualizar.</li>
               </ul>
-              <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 mt-4">Exemplo Básico:</h3>
+              <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 mt-4">Regras importantes:</h3>
+              <ul className="list-disc pl-5 space-y-2">
+                <li>Cores personalizadas só aparecem na raiz e nos filhos diretos da raiz.</li>
+                <li>A partir do segundo nível, a propriedade <code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">color</code> é ignorada.</li>
+                <li>O arquivo exportado pode incluir <code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">id</code> e <code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">textColor</code>, mas você não precisa preencher esses campos manualmente.</li>
+              </ul>
+              <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 mt-4">Exemplo básico:</h3>
               <pre className="bg-zinc-100 dark:bg-zinc-950 p-4 rounded-xl overflow-x-auto text-sm font-mono border border-zinc-200 dark:border-zinc-800">
 {`{
   "title": "Ideia Principal",
   "content": "Esta é a ideia **principal** do projeto.",
   "color": "#6366f1",
-  "textColor": "#ffffff",
   "children": [
     {
       "title": "Sub-ideia 1",
@@ -311,6 +316,7 @@ export default function App() {
     },
     {
       "title": "Sub-ideia 2",
+      "color": "#14b8a6",
       "children": [
         { "title": "Detalhe A" }
       ]
