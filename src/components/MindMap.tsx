@@ -19,6 +19,8 @@ type FocusTarget = {
 };
 
 const DEFAULT_ROOT_COLOR = '#6366f1';
+const EXPAND_BUTTON_SIZE = 20;
+const EXPAND_BUTTON_RIGHT_OFFSET = 30;
 
 // ─── Performance Helpers ───────────────────────────────────────────────────────
 
@@ -72,9 +74,6 @@ const countNodes = (node: MindMapNode): number => {
   return 1 + (node.children?.reduce((sum, child) => sum + countNodes(child), 0) ?? 0);
 };
 
-const clamp = (value: number, min: number, max: number): number =>
-  Math.min(Math.max(value, min), max);
-
 let textMeasureCanvas: HTMLCanvasElement | null = null;
 let textMeasureContext: CanvasRenderingContext2D | null = null;
 
@@ -116,27 +115,116 @@ const getContentInsetRight = (depth: number): number => {
   return 8;
 };
 
+const getCardWidth = (depth: number): number => {
+  if (depth === 0) return 220;
+  if (depth === 1) return 196;
+  return 196;
+};
+
+const estimateWrappedLineCount = (
+  text: string,
+  font: string,
+  maxWidth: number,
+  fallbackFactor: number
+): number => {
+  const normalizedText = text.trim();
+  if (!normalizedText) return 1;
+
+  const segments = normalizedText.split('\n');
+  let lines = 0;
+
+  const measureChunk = (chunk: string) => measureTextWidth(chunk, font, fallbackFactor);
+
+  const countWordLines = (segment: string): number => {
+    const words = segment.split(/\s+/).filter(Boolean);
+    if (words.length === 0) return 1;
+
+    let lineCount = 1;
+    let currentLine = '';
+
+    for (const word of words) {
+      const candidate = currentLine ? `${currentLine} ${word}` : word;
+      if (measureChunk(candidate) <= maxWidth) {
+        currentLine = candidate;
+        continue;
+      }
+
+      if (!currentLine) {
+        let chunk = '';
+        for (const char of word) {
+          const candidateChunk = `${chunk}${char}`;
+          if (chunk && measureChunk(candidateChunk) > maxWidth) {
+            lineCount += 1;
+            chunk = char;
+            continue;
+          }
+          chunk = candidateChunk;
+        }
+        currentLine = chunk;
+        continue;
+      }
+
+      lineCount += 1;
+      currentLine = word;
+      if (measureChunk(currentLine) <= maxWidth) continue;
+
+      let chunk = '';
+      for (const char of word) {
+        const candidateChunk = `${chunk}${char}`;
+        if (chunk && measureChunk(candidateChunk) > maxWidth) {
+          lineCount += 1;
+          chunk = char;
+          continue;
+        }
+        chunk = candidateChunk;
+      }
+      currentLine = chunk;
+    }
+
+    return lineCount;
+  };
+
+  for (const segment of segments) {
+    lines += countWordLines(segment);
+  }
+
+  return lines;
+};
+
 const estimateCardWidth = (node: MindMapNode, depth: number): number => {
-  const title = (node.title ?? '').trim();
-  const titleFont = depth === 0
-    ? '700 14px system-ui, sans-serif'
-    : '600 13px system-ui, sans-serif';
-  const titleWidth = measureTextWidth(title, titleFont, depth === 0 ? 8.4 : 7.2);
-  const sidePadding = getCardPaddingX(depth) * 2 + getContentInsetX(depth) + getContentInsetRight(depth);
-  const minWidth = depth === 0 ? 100 : 64;
-  const preferredWidth = Math.max(titleWidth + sidePadding, minWidth);
-  return clamp(preferredWidth, minWidth, 320);
+  return getCardWidth(depth);
 };
 
 const getExpandButtonAnchorY = (node: { y: number; depth: number; data: MindMapNode }): number => {
   const cardWidth = estimateCardWidth(node.data, node.depth);
-  return node.y + cardWidth - 20;
+  return node.y + cardWidth - (EXPAND_BUTTON_RIGHT_OFFSET - EXPAND_BUTTON_SIZE / 2);
+};
+
+const getExpandButtonLinkStartY = (node: { y: number; depth: number; data: MindMapNode }): number => {
+  return getExpandButtonAnchorY(node) + EXPAND_BUTTON_SIZE / 2;
 };
 
 const estimateCardHeight = (node: MindMapNode, depth: number): number => {
+  const cardWidth = estimateCardWidth(node, depth);
+  const px = getCardPaddingX(depth);
+  const contentInsetX = getContentInsetX(depth);
+  const contentInsetRight = getContentInsetRight(depth);
+  const contentMaxWidth = Math.max(cardWidth - px * 2 - contentInsetX - contentInsetRight, 80);
   const hasContent = Boolean(node.content?.trim());
-  const contentLines = hasContent ? node.content!.split('\n').filter(Boolean).length : 0;
-  const titleHeight = depth === 0 ? 22 : 20;
+  const titleFont = depth === 0
+    ? '700 14px system-ui, sans-serif'
+    : '600 13px system-ui, sans-serif';
+  const titleLines = estimateWrappedLineCount(
+    node.title ?? '',
+    titleFont,
+    contentMaxWidth,
+    depth === 0 ? 8.4 : 7.2
+  );
+  const titleLineHeight = depth === 0 ? 18 : 17;
+  const titleHeight = Math.max(titleLines, 1) * titleLineHeight;
+  const contentLines = hasContent
+    ? estimateWrappedLineCount(node.content ?? '', '400 11px system-ui, sans-serif', contentMaxWidth, 6.4)
+    : 0;
   const contentHeight = hasContent ? Math.min(contentLines, 6) * 18 + 12 : 0;
   const verticalPadding = depth === 0 ? 28 : 20;
   return titleHeight + contentHeight + verticalPadding;
@@ -585,8 +673,10 @@ const NodeComponent = React.memo<NodeProps>(({
                 <div style={{
                   fontSize: isRoot ? 14 : 13,
                   fontWeight: isRoot ? 700 : 600,
-                  whiteSpace: 'nowrap',
+                  whiteSpace: 'normal',
+                  overflowWrap: 'anywhere',
                   lineHeight: 1.3,
+                  width: '100%',
                   maxWidth: '100%',
                   textAlign: 'left',
                 }}>
@@ -615,9 +705,9 @@ const NodeComponent = React.memo<NodeProps>(({
                 onClick={e => { e.stopPropagation(); onToggleCollapse(node.data.id!); }}
                 title={isCollapsed ? 'Expandir' : 'Recolher'}
                 style={{
-                  position: 'absolute', right: -30, top: '50%',
+                  position: 'absolute', right: -EXPAND_BUTTON_RIGHT_OFFSET, top: '50%',
                   transform: 'translateY(-50%)',
-                  width: 20, height: 20, borderRadius: '50%',
+                  width: EXPAND_BUTTON_SIZE, height: EXPAND_BUTTON_SIZE, borderRadius: '50%',
                   border: `2.5px solid ${resolvedAccent ?? t.collapseNeutralBorder}`,
                   background: isCollapsed ? (resolvedAccent ?? baseBranchColor ?? DEFAULT_ROOT_COLOR) : t.collapseBg,
                   color: isCollapsed ? 'white' : (resolvedAccent ?? t.collapseNeutralDot),
@@ -999,7 +1089,7 @@ const MindMap: React.FC<MindMapProps> = ({
               {links.map(link => {
                 const stroke = getInheritedBranchColor(link.target, rootColor);
                 const sw = link.target.depth === 1 ? 2.2 : 1.4;
-                const sy = getExpandButtonAnchorY(link.source), sx = link.source.x;
+                const sy = getExpandButtonLinkStartY(link.source), sx = link.source.x;
                 const ty = link.target.y, tx = link.target.x;
                 const mx = (sy + ty) / 2;
                 return (
