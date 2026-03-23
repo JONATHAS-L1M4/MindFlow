@@ -21,6 +21,7 @@ type FocusTarget = {
 const DEFAULT_ROOT_COLOR = '#6366f1';
 const EXPAND_BUTTON_SIZE = 20;
 const EXPAND_BUTTON_RIGHT_OFFSET = 30;
+const COLLAPSED_IDS_STORAGE_KEY = 'mindflow-collapsed-ids';
 
 // ─── Performance Helpers ───────────────────────────────────────────────────────
 
@@ -83,6 +84,27 @@ const removeNode = (root: MindMapNode, id: string, parentDepth = 0): boolean => 
 
 const countNodes = (node: MindMapNode): number => {
   return 1 + (node.children?.reduce((sum, child) => sum + countNodes(child), 0) ?? 0);
+};
+
+const collectCollapsedNodeIds = (node: MindMapNode, collapsed = new Set<string>()): Set<string> => {
+  if (node.children?.length) {
+    if (node.id) {
+      collapsed.add(node.id);
+    }
+    node.children.forEach(child => collectCollapsedNodeIds(child, collapsed));
+  }
+  return collapsed;
+};
+
+const filterCollapsedNodeIds = (collapsedIds: Iterable<string>, node: MindMapNode): Set<string> => {
+  const expandableNodeIds = collectCollapsedNodeIds(node);
+  const next = new Set<string>();
+  for (const id of collapsedIds) {
+    if (expandableNodeIds.has(id)) {
+      next.add(id);
+    }
+  }
+  return next;
 };
 
 let textMeasureCanvas: HTMLCanvasElement | null = null;
@@ -823,7 +845,22 @@ const MindMap: React.FC<MindMapProps> = ({
   const isDark = activeTheme === 'dark';
   const rootColor = data.color ?? DEFAULT_ROOT_COLOR;
 
-  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(() => {
+    const defaultCollapsedIds = collectCollapsedNodeIds(data);
+    if (typeof window === 'undefined') return defaultCollapsedIds;
+
+    try {
+      const savedCollapsedIds = localStorage.getItem(COLLAPSED_IDS_STORAGE_KEY);
+      if (!savedCollapsedIds) return defaultCollapsedIds;
+
+      const parsedCollapsedIds = JSON.parse(savedCollapsedIds);
+      if (!Array.isArray(parsedCollapsedIds)) return defaultCollapsedIds;
+
+      return filterCollapsedNodeIds(parsedCollapsedIds, data);
+    } catch {
+      return defaultCollapsedIds;
+    }
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [zoom, setZoom] = useState(1);
   const [translate, setTranslate] = useState({ x: 0, y: 0 });
@@ -846,6 +883,20 @@ const MindMap: React.FC<MindMapProps> = ({
     setSelectedId(null);
     setEditingId(null);
   }, [isReadOnly]);
+
+  useEffect(() => {
+    setCollapsedIds(prev => {
+      const next = filterCollapsedNodeIds(prev, data);
+      if (next.size === prev.size && [...next].every(id => prev.has(id))) {
+        return prev;
+      }
+      return next;
+    });
+  }, [data]);
+
+  useEffect(() => {
+    localStorage.setItem(COLLAPSED_IDS_STORAGE_KEY, JSON.stringify([...collapsedIds]));
+  }, [collapsedIds]);
 
   // ── CRUD ────────────────────────────────────────────────────────────────────
 
