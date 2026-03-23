@@ -326,14 +326,15 @@ export default function App() {
           </button>
           <button
             onClick={() => setActiveTab(activeTab === 'editor' ? 'viewer' : 'editor')}
-            className={`flex items-center gap-2 px-4 py-2 h-10 rounded-xl text-sm font-medium transition-all duration-200 shadow-sm border ${
+            className={`flex items-center justify-center w-10 h-10 rounded-xl border shadow-sm transition-all ${
               activeTab === 'editor' 
-                ? 'bg-indigo-600 text-white border-indigo-600' 
+                ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700'
                 : 'bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-700'
             }`}
+            title={activeTab === 'editor' ? 'Fechar editor JSON' : 'Abrir editor JSON'}
           >
             <Code size={16} />
-            {activeTab === 'editor' ? 'Fechar JSON' : 'Editor JSON'}
+            {activeTab === 'editor'}
           </button>
         </div>
 
