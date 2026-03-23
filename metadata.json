@@ -1,0 +1,5 @@
+{
+  "name": "MindMap Visualizer",
+  "description": "A simple hierarchical mind map visualizer from JSON input.",
+  "requestFramePermissions": []
+}

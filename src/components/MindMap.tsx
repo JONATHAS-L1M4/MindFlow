@@ -1,0 +1,939 @@
+import React, { useState, useMemo, useRef, useEffect } from 'react';
+import * as d3 from 'd3';
+import { motion, AnimatePresence } from 'motion/react';
+import { ZoomIn, ZoomOut, Maximize2, Plus, Pencil, Trash2, RotateCcw } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
+import { MindMapNode } from '../types';
+
+interface MindMapProps {
+  data: MindMapNode;
+  onChange?: (data: MindMapNode) => void;
+  isReadOnly?: boolean;
+  theme?: 'light' | 'dark';
+  onThemeChange?: (theme: 'light' | 'dark') => void;
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+const generateId = () => `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+const findNode = (root: MindMapNode, id: string): MindMapNode | null => {
+  if (root.id === id) return root;
+  for (const child of root.children ?? []) {
+    const found = findNode(child, id);
+    if (found) return found;
+  }
+  return null;
+};
+
+const removeNode = (root: MindMapNode, id: string): boolean => {
+  if (!root.children) return false;
+  const idx = root.children.findIndex(c => c.id === id);
+  if (idx !== -1) {
+    root.children.splice(idx, 1);
+    if (root.children.length === 0) delete root.children;
+    return true;
+  }
+  for (const child of root.children) {
+    if (removeNode(child, id)) return true;
+  }
+  return false;
+};
+
+// ─── Palette ──────────────────────────────────────────────────────────────────
+
+const BRANCH_COLORS = [
+  '#7B61FF', '#FF8C00', '#00C875', '#FF3B30',
+  '#0090FF', '#A259FF', '#FF6B35', '#00BCD4',
+] as const;
+
+// Returns the color for a given branch index (inherits down the tree)
+const branchColor = (idx: number) => BRANCH_COLORS[idx % BRANCH_COLORS.length];
+
+// ─── Theme tokens ─────────────────────────────────────────────────────────────
+
+const THEMES = {
+  light: {
+    canvasBg: '#F7F6F3', dotColor: '#C9C5BE',
+    rootBg: '#1C1917', rootText: '#FFFFFF', rootShadow: '0 6px 24px rgba(0,0,0,0.28)',
+    leafBg: '#FFFFFF', leafText: '#1C1917', leafShadow: '0 2px 8px rgba(0,0,0,0.09)',
+    // Content / notes text inside leaf nodes
+    leafContentColor: '#6B6863',
+    // Edit form on leaf (dark text on white bg)
+    editTitleColor: '#1C1917', editContentColor: '#6B6863', editPlaceholder: '#B0ACA6',
+    inputBorderColored: 'rgba(255,255,255,0.35)', inputBorderLeaf: 'rgba(0,0,0,0.15)',
+    cancelBg: 'rgba(0,0,0,0.07)', cancelColor: '#1C1917',
+    hexLabelColor: 'rgba(0,0,0,0.35)',
+    collapseBg: '#FFFFFF', collapseShadow: '0 1px 5px rgba(0,0,0,0.14)', collapseNeutralBorder: '#B8B4AD', collapseNeutralDot: '#B8B4AD',
+    linkNeutral: '#D1CEC7',
+    chromeBg: '#FFFFFF', chromeBorder: 'rgba(0,0,0,0.10)', chromeShadow: '0 2px 10px rgba(0,0,0,0.10)', chromeColor: '#6B6863', chromeHover: '#F0EDE8', chromeDivider: 'rgba(0,0,0,0.07)',
+  },
+  dark: {
+    canvasBg: '#141416', dotColor: '#252529',
+    rootBg: '#FFFFFF', rootText: '#1C1917', rootShadow: '0 6px 28px rgba(0,0,0,0.60)',
+    leafBg: '#1E1E22', leafText: '#ECEAE4', leafShadow: '0 2px 10px rgba(0,0,0,0.40)',
+    // Content / notes text inside leaf nodes — bumped up from #7A for legibility
+    leafContentColor: '#A09D98',
+    // Edit form on leaf (light text on dark bg)
+    editTitleColor: '#ECEAE4', editContentColor: '#A09D98', editPlaceholder: '#4A4A52',
+    inputBorderColored: 'rgba(255,255,255,0.30)', inputBorderLeaf: 'rgba(255,255,255,0.18)',
+    cancelBg: 'rgba(255,255,255,0.08)', cancelColor: '#ECEAE4',
+    hexLabelColor: 'rgba(255,255,255,0.35)',
+    collapseBg: '#1E1E22', collapseShadow: '0 1px 6px rgba(0,0,0,0.45)', collapseNeutralBorder: '#3E3E45', collapseNeutralDot: '#4A4A52',
+    linkNeutral: '#2E2E36',
+    chromeBg: '#252528', chromeBorder: 'rgba(255,255,255,0.10)', chromeShadow: '0 2px 14px rgba(0,0,0,0.50)', chromeColor: '#9A9895', chromeHover: '#2E2E33', chromeDivider: 'rgba(255,255,255,0.07)',
+  },
+} as const;
+
+type ThemeKey = keyof typeof THEMES;
+
+// ─── Toolbar button ───────────────────────────────────────────────────────────
+
+const ToolbarBtn: React.FC<{
+  onClick: (e: React.MouseEvent) => void;
+  danger?: boolean;
+  label?: string;
+  children: React.ReactNode;
+}> = ({ onClick, danger, label, children }) => (
+  <button
+    onMouseDown={e => { e.stopPropagation(); e.preventDefault(); }}
+    onClick={e => { e.stopPropagation(); onClick(e); }}
+    title={label}
+    style={{
+      display: 'flex', alignItems: 'center', gap: 4,
+      padding: label ? '4px 8px' : '4px 6px',
+      borderRadius: 6, border: 'none',
+      background: 'transparent', color: 'white',
+      cursor: 'pointer', fontSize: 12, fontWeight: 500,
+      transition: 'background 0.1s',
+    }}
+    onMouseEnter={e => { e.currentTarget.style.background = danger ? 'rgba(220,38,38,0.55)' : 'rgba(255,255,255,0.14)'; }}
+    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+  >
+    {children}
+    {label && <span>{label}</span>}
+  </button>
+);
+
+// ─── Color utilities ──────────────────────────────────────────────────────────
+
+function hexToHsv(hex: string): [number, number, number] {
+  const r = parseInt(hex.slice(1, 3), 16) / 255;
+  const g = parseInt(hex.slice(3, 5), 16) / 255;
+  const b = parseInt(hex.slice(5, 7), 16) / 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min;
+  let h = 0;
+  if (d) {
+    if (max === r) h = ((g - b) / d + 6) % 6;
+    else if (max === g) h = (b - r) / d + 2;
+    else h = (r - g) / d + 4;
+    h = h / 6;
+  }
+  return [h, max ? d / max : 0, max];
+}
+
+function hsvToHex(h: number, s: number, v: number): string {
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s);
+  let r = 0, g = 0, b = 0;
+  switch (i % 6) {
+    case 0: r=v; g=t; b=p; break; case 1: r=q; g=v; b=p; break;
+    case 2: r=p; g=v; b=t; break; case 3: r=p; g=q; b=v; break;
+    case 4: r=t; g=p; b=v; break; case 5: r=v; g=p; b=q; break;
+  }
+  return '#' + [r, g, b].map(x => Math.round(x * 255).toString(16).padStart(2, '0')).join('');
+}
+
+// ─── ColorPrism ───────────────────────────────────────────────────────────────
+
+const ColorPrism: React.FC<{
+  value: string | null;
+  defaultColor: string;
+  onChange: (hex: string | null) => void;
+  hasLightText: boolean;
+  inputBorder: string;
+  editTitleClr: string;
+  hexLabelClr: string;
+}> = ({ value, defaultColor, onChange, hasLightText, inputBorder, editTitleClr, hexLabelClr }) => {
+  const active = value ?? defaultColor;
+  const [hsv, setHsv] = React.useState<[number, number, number]>(() => hexToHsv(active));
+  const [hexInput, setHexInput] = React.useState((active).replace('#', ''));
+  const sbRef = useRef<HTMLCanvasElement>(null);
+  const hueRef = useRef<HTMLCanvasElement>(null);
+  const draggingSb = useRef(false);
+  const draggingHue = useRef(false);
+
+  // Sync from outside (when editColor changes e.g. opening editor)
+  React.useEffect(() => {
+    const h = hexToHsv(active);
+    setHsv(h);
+    setHexInput(active.replace('#', ''));
+  }, [value]);
+
+  // Draw SB square
+  React.useEffect(() => {
+    const cv = sbRef.current; if (!cv) return;
+    const ctx = cv.getContext('2d')!;
+    const W = cv.width, H = cv.height;
+    // White → hue
+    const gH = ctx.createLinearGradient(0, 0, W, 0);
+    gH.addColorStop(0, 'white');
+    gH.addColorStop(1, hsvToHex(hsv[0], 1, 1));
+    ctx.fillStyle = gH; ctx.fillRect(0, 0, W, H);
+    // Transparent → black
+    const gV = ctx.createLinearGradient(0, 0, 0, H);
+    gV.addColorStop(0, 'rgba(0,0,0,0)');
+    gV.addColorStop(1, 'rgba(0,0,0,1)');
+    ctx.fillStyle = gV; ctx.fillRect(0, 0, W, H);
+  }, [hsv[0]]);
+
+  // Draw hue bar
+  React.useEffect(() => {
+    const cv = hueRef.current; if (!cv) return;
+    const ctx = cv.getContext('2d')!;
+    const g = ctx.createLinearGradient(0, 0, cv.width, 0);
+    [0,1/6,2/6,3/6,4/6,5/6,1].forEach((s, i) => g.addColorStop(s, `hsl(${i*60},100%,50%)`));
+    ctx.fillStyle = g; ctx.fillRect(0, 0, cv.width, cv.height);
+  }, []);
+
+  const commit = (h: number, s: number, v: number) => {
+    setHsv([h, s, v]);
+    const hex = hsvToHex(h, s, v);
+    setHexInput(hex.replace('#', ''));
+    onChange(hex);
+  };
+
+  const handleSbPointer = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!draggingSb.current) return;
+    const cv = sbRef.current!;
+    const rect = cv.getBoundingClientRect();
+    const s = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const v = Math.max(0, Math.min(1, 1 - (e.clientY - rect.top) / rect.height));
+    commit(hsv[0], s, v);
+  };
+
+  const handleHuePointer = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!draggingHue.current) return;
+    const cv = hueRef.current!;
+    const rect = cv.getBoundingClientRect();
+    const h = Math.max(0, Math.min(0.9999, (e.clientX - rect.left) / rect.width));
+    commit(h, hsv[1], hsv[2]);
+  };
+
+  const sbCursorX = hsv[1] * 100;
+  const sbCursorY = (1 - hsv[2]) * 100;
+  const hueCursorX = hsv[0] * 100;
+  const borderAlpha = hasLightText ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.12)';
+
+  return (
+    <div
+      onMouseDown={e => e.stopPropagation()}
+      onClick={e => e.stopPropagation()}
+      style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4, width: '100%' }}
+    >
+      {/* SB square */}
+      <div style={{ position: 'relative', width: '100%', height: 110, borderRadius: 6, overflow: 'hidden', border: `1px solid ${borderAlpha}` }}>
+        <canvas
+          ref={sbRef}
+          width={200} height={110}
+          style={{ width: '100%', height: '100%', display: 'block', cursor: 'crosshair' }}
+          onPointerDown={e => { draggingSb.current = true; e.currentTarget.setPointerCapture(e.pointerId); handleSbPointer(e); }}
+          onPointerMove={handleSbPointer}
+          onPointerUp={() => { draggingSb.current = false; }}
+        />
+        {/* Cursor */}
+        <div style={{
+          position: 'absolute',
+          left: `${sbCursorX}%`, top: `${sbCursorY}%`,
+          transform: 'translate(-50%, -50%)',
+          width: 12, height: 12, borderRadius: '50%',
+          border: '2px solid white',
+          boxShadow: '0 0 0 1px rgba(0,0,0,0.3)',
+          pointerEvents: 'none',
+          background: hsvToHex(hsv[0], hsv[1], hsv[2]),
+        }} />
+      </div>
+
+      {/* Hue bar */}
+      <div style={{ position: 'relative', width: '100%', height: 12, borderRadius: 6, overflow: 'hidden', border: `1px solid ${borderAlpha}` }}>
+        <canvas
+          ref={hueRef}
+          width={200} height={12}
+          style={{ width: '100%', height: '100%', display: 'block', cursor: 'ew-resize' }}
+          onPointerDown={e => { draggingHue.current = true; e.currentTarget.setPointerCapture(e.pointerId); handleHuePointer(e); }}
+          onPointerMove={handleHuePointer}
+          onPointerUp={() => { draggingHue.current = false; }}
+        />
+        {/* Thumb */}
+        <div style={{
+          position: 'absolute',
+          left: `${hueCursorX}%`, top: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 14, height: 14, borderRadius: '50%',
+          border: '2px solid white',
+          boxShadow: '0 0 0 1px rgba(0,0,0,0.25)',
+          pointerEvents: 'none',
+          background: hsvToHex(hsv[0], 1, 1),
+        }} />
+      </div>
+
+      {/* Hex input row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* Preview swatch */}
+        <div style={{
+          width: 18, height: 18, borderRadius: '50%', flexShrink: 0,
+          background: active,
+          border: `1.5px solid ${hasLightText ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.15)'}`,
+        }} />
+        <span style={{ fontSize: 10, color: hexLabelClr, userSelect: 'none' }}>#</span>
+        <input
+          value={hexInput}
+          onChange={e => {
+            const raw = e.target.value.replace(/[^0-9a-fA-F]/g, '').slice(0, 6);
+            setHexInput(raw);
+            if (raw.length === 6) {
+              const hex = '#' + raw;
+              onChange(hex);
+              setHsv(hexToHsv(hex));
+            } else if (raw.length === 0) {
+              onChange(null);
+            }
+          }}
+          onMouseDown={e => e.stopPropagation()}
+          onClick={e => e.stopPropagation()}
+          placeholder="ex: 7B61FF"
+          maxLength={6}
+          spellCheck={false}
+          style={{
+            background: 'transparent', border: 'none', outline: 'none',
+            borderBottom: `1px solid ${inputBorder}`,
+            color: editTitleClr, fontSize: 11, fontFamily: 'monospace',
+            width: 72, letterSpacing: '0.05em', paddingBottom: 1,
+          }}
+        />
+        {/* Reset to default */}
+        {value && (
+          <button
+            onMouseDown={e => e.stopPropagation()}
+            onClick={e => { e.stopPropagation(); onChange(null); }}
+            title="Cor padrão"
+            style={{
+              marginLeft: 'auto', padding: '2px 4px', borderRadius: 4, cursor: 'pointer',
+              background: 'transparent', border: `1px solid ${borderAlpha}`,
+              color: editTitleClr, display: 'flex', alignItems: 'center',
+            }}
+          >
+            <RotateCcw size={10} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ─── Main component ───────────────────────────────────────────────────────────
+
+const MindMap: React.FC<MindMapProps> = ({
+  data, onChange, isReadOnly = false,
+  theme: themeProp, onThemeChange,
+}) => {
+  const [internalTheme, setInternalTheme] = useState<ThemeKey>(themeProp ?? 'light');
+
+  useEffect(() => {
+    if (themeProp) return;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+    setInternalTheme(mediaQuery.matches ? 'dark' : 'light');
+    const listener = (e: MediaQueryListEvent) => setInternalTheme(e.matches ? 'dark' : 'light');
+    mediaQuery.addEventListener('change', listener);
+    return () => mediaQuery.removeEventListener('change', listener);
+  }, [themeProp]);
+
+  const activeTheme: ThemeKey = themeProp ?? internalTheme;
+  const t = THEMES[activeTheme];
+  const isDark = activeTheme === 'dark';
+
+
+
+  const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [translate, setTranslate] = useState({ x: 0, y: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
+
+  // Edit state
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
+  const [editContent, setEditContent] = useState('');
+  const [editColor, setEditColor] = useState<string | null>(null);
+  const [editNodeAccent, setEditNodeAccent] = useState<{ branchColor: string }>({ branchColor: '#7B61FF' });
+  const editInputRef = useRef<HTMLInputElement>(null);
+
+  // ── CRUD ────────────────────────────────────────────────────────────────────
+
+  const handleAddChild = (parentId: string) => {
+    const newData = JSON.parse(JSON.stringify(data));
+    const parent = findNode(newData, parentId);
+    if (!parent) return;
+    if (!parent.children) parent.children = [];
+    const newId = generateId();
+    parent.children.push({ id: newId, title: 'Nova ideia' });
+    onChange?.(newData);
+    setCollapsedIds(prev => { const n = new Set(prev); n.delete(parentId); return n; });
+    setSelectedId(null);
+    setTimeout(() => {
+      setEditingId(newId);
+      setEditTitle('Nova ideia');
+      setEditContent('');
+      setEditColor(null);
+      setTimeout(() => { editInputRef.current?.focus(); editInputRef.current?.select(); }, 80);
+    }, 120);  };
+
+  const handleDelete = (id: string) => {
+    if (id === data.id) return;
+    const newData = JSON.parse(JSON.stringify(data));
+    removeNode(newData, id);
+    onChange?.(newData);
+    setSelectedId(null);
+  };
+
+  const startEdit = (node: MindMapNode, _cardEl?: Element, accent?: { hasLightText: boolean; branchColor: string }) => {
+    setEditingId(node.id!);
+    setEditTitle(node.title);
+    setEditContent(node.content || '');
+    setEditColor(node.color ?? null);
+    if (accent) setEditNodeAccent({ branchColor: accent.branchColor });
+    setTimeout(() => { editInputRef.current?.focus(); editInputRef.current?.select(); }, 60);
+  };
+
+  const saveEdit = () => {
+    if (!editingId) return;
+    const newData = JSON.parse(JSON.stringify(data));
+    const node = findNode(newData, editingId);
+    if (node) {
+      node.title = editTitle.trim() || 'Sem título';
+      if (editContent.trim()) node.content = editContent; else delete node.content;
+      if (editColor) node.color = editColor; else delete node.color;
+    }
+    onChange?.(newData);
+    setEditingId(null);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+  };
+
+  const toggleCollapse = (id: string) => {
+    setCollapsedIds(prev => {
+      const n = new Set(prev);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+  };
+
+  // ── D3 layout ────────────────────────────────────────────────────────────────
+
+  const { nodes, links, branchIndexMap } = useMemo(() => {
+    const root = d3.hierarchy(data, d => collapsedIds.has(d.id!) ? null : d.children);
+    const tree = d3.tree<MindMapNode>()
+      .nodeSize([72, 310])
+      .separation((a, b) => a.parent === b.parent ? 1.2 : 2.0);
+    const treeData = tree(root);
+
+    // Map each node id → branch index (0-7), null for root
+    const indexMap = new Map<string, number | null>();
+    treeData.descendants().forEach(node => {
+      if (node.depth === 0) { indexMap.set(node.data.id!, null); return; }
+      let anc = node;
+      while (anc.depth > 1 && anc.parent) anc = anc.parent;
+      const idx = anc.parent?.children?.indexOf(anc) ?? 0;
+      indexMap.set(node.data.id!, idx);
+    });
+
+    return { nodes: treeData.descendants(), links: treeData.links(), branchIndexMap: indexMap };
+  }, [data, collapsedIds]);
+
+  const cx = (containerRef.current?.clientWidth ?? window.innerWidth) / 3;
+  const cy = (containerRef.current?.clientHeight ?? window.innerHeight) / 2;
+
+  // ── Canvas interaction ────────────────────────────────────────────────────────
+
+  const handleCanvasMouseDown = (e: React.MouseEvent) => {
+    if ((e.target as HTMLElement).closest('[data-interactive]')) return;
+    setIsDragging(true);
+    if (selectedId) setSelectedId(null);
+    setDragStart({ x: e.clientX - translate.x, y: e.clientY - translate.y });
+  };
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!isDragging) return;
+    setTranslate({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
+  };
+  const handleMouseUp = () => setIsDragging(false);
+  const handleWheel = (e: React.WheelEvent) => {
+    const f = e.deltaY > 0 ? 0.91 : 1.1;
+    setZoom(z => Math.min(Math.max(z * f, 0.08), 5));
+  };
+  const resetView = () => { setZoom(1); setTranslate({ x: 0, y: 0 }); };
+
+  // ── Chrome style ──────────────────────────────────────────────────────────────
+
+  const chrome = { background: t.chromeBg, border: `1px solid ${t.chromeBorder}` };
+
+  const ChromeBtn: React.FC<{ onClick: () => void; title?: string; children: React.ReactNode }> = ({ onClick, title: ttl, children }) => (
+    <button
+      onClick={onClick} title={ttl}
+      style={{ padding: 8, background: 'transparent', border: 'none', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.chromeColor, transition: 'background 0.12s' }}
+      onMouseEnter={e => { e.currentTarget.style.background = t.chromeHover; }}
+      onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+    >{children}</button>
+  );
+
+  // ── Render ────────────────────────────────────────────────────────────────────
+
+  return (
+    <div
+      ref={containerRef}
+      style={{ position: 'relative', width: '100%', height: '100%', overflow: 'hidden', background: t.canvasBg, cursor: isDragging ? 'grabbing' : 'grab', userSelect: 'none', transition: 'background 0.3s' }}
+      onMouseDown={handleCanvasMouseDown}
+      onMouseMove={handleMouseMove}
+      onMouseUp={handleMouseUp}
+      onMouseLeave={handleMouseUp}
+      onWheel={handleWheel}
+    >
+      {/* Dot grid */}
+      <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+        <defs>
+          <pattern id="mm-grid" x="0" y="0" width="22" height="22" patternUnits="userSpaceOnUse">
+            <circle cx="1.1" cy="1.1" r="1.1" fill={t.dotColor} />
+          </pattern>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#mm-grid)" />
+      </svg>
+
+      {/* Canvas */}
+      <div style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none',
+        transform: `translate(${translate.x}px, ${translate.y}px) scale(${zoom})`,
+        transformOrigin: 'center', willChange: 'transform',
+        transition: isDragging ? 'none' : 'transform 0.06s ease-out',
+      }}>
+        <svg style={{ width: '100%', height: '100%', overflow: 'visible' }}>
+          <g transform={`translate(${cx}, ${cy})`}>
+
+            {/* Links */}
+            <AnimatePresence>
+              {links.map(link => {
+                const bIdx = branchIndexMap.get(link.target.data.id!);
+                // Walk up from target to find the nearest ancestor (or self) with a custom color,
+                // falling back to the branch palette color, then neutral.
+                const resolveStroke = (node: typeof link.target): string => {
+                  if (node.data.color) return node.data.color;
+                  if (node.parent && node.parent.data.id) return resolveStroke(node.parent);
+                  return bIdx != null ? branchColor(bIdx) : t.linkNeutral;
+                };
+                const stroke = resolveStroke(link.target);
+                const sw = link.target.depth === 1 ? 3.5 : 2.5;
+                const sy = link.source.y, sx = link.source.x;
+                const ty = link.target.y, tx = link.target.x;
+                const mx = (sy + ty) / 2;
+                return (
+                  <motion.path
+                    key={`${link.source.data.id}-${link.target.data.id}`}
+                    initial={{ pathLength: 0, opacity: 0 }}
+                    animate={{ pathLength: 1, opacity: 1 }}
+                    exit={{ pathLength: 0, opacity: 0 }}
+                    transition={{ duration: 0.26, ease: 'easeOut' }}
+                    d={`M ${sy} ${sx} C ${mx} ${sx}, ${mx} ${tx}, ${ty} ${tx}`}
+                    fill="none" stroke={stroke} strokeWidth={sw} strokeLinecap="round"
+                  />
+                );
+              })}
+            </AnimatePresence>
+
+            {/* Nodes */}
+            <AnimatePresence>
+              {[...nodes].map(node => {
+                const bIdx = branchIndexMap.get(node.data.id!) ?? null;
+                const baseBranchColor = bIdx != null ? branchColor(bIdx) : null;
+                // Custom color overrides branch color (stored in node.data.color)
+                const customColor = node.data.color ?? null;
+                const resolvedAccent = customColor ?? baseBranchColor;
+
+                const isRoot = node.depth === 0;
+                const isSelected = selectedId === node.data.id;
+                const isEditing = editingId === node.data.id;
+                const isCollapsed = collapsedIds.has(node.data.id!);
+                const childCount = node.data.children?.length ?? 0;
+
+                // ── Visual tokens per depth ──
+                let bg: string, textColor: string, nodeBorder: string, nodeShadow: string;
+
+                if (isRoot) {
+                  bg = customColor ?? t.rootBg;
+                  // If a custom color is set, always use white text (like depth-1 nodes).
+                  // In dark mode with no custom color the root is white → dark text.
+                  textColor = customColor ? '#FFFFFF' : t.rootText;
+                  nodeBorder = 'none';
+                  nodeShadow = isSelected ? 'none' : (customColor ? `0 6px 24px ${customColor}55` : t.rootShadow);
+                } else if (node.depth === 1) {
+                  bg = customColor ?? baseBranchColor ?? '#7B61FF';
+                  textColor = '#FFFFFF'; nodeBorder = 'none';
+                  // FIX: no shadow when selected
+                  nodeShadow = isSelected ? 'none' : `0 4px 16px ${bg}55`;
+                } else {
+                  bg = t.leafBg; textColor = t.leafText;
+                  const borderColor = isDark
+                    ? (resolvedAccent ? resolvedAccent + 'AA' : '#3A3A42')
+                    : (resolvedAccent ?? '#D1CEC7');
+                  nodeBorder = `2px solid ${borderColor}`;
+                  // FIX: no shadow when selected
+                  nodeShadow = isSelected ? 'none' : t.leafShadow;
+                }
+
+                const borderRadius = isRoot ? 14 : 10;
+                const px = isRoot ? 22 : node.depth === 1 ? 18 : 14;
+                const py = isRoot ? 11 : 8;
+
+                // TRUE when node bg is dark/coloured → light text; used for outline color on edit
+                const hasLightText = node.depth === 1 || (isRoot && !isDark) || (isRoot && !!customColor);
+
+                return (
+                  <motion.g
+                    key={node.data.id}
+                    initial={{ opacity: 0, scale: 0.55, x: node.parent?.y ?? node.y, y: node.parent?.x ?? node.x }}
+                    animate={{ opacity: 1, scale: 1, x: node.y, y: node.x }}
+                    exit={{ opacity: 0, scale: 0.4 }}
+                    transition={{ type: 'spring', damping: 28, stiffness: 240, mass: 0.7 }}
+                  >
+                    <foreignObject
+                      width="380" height="360" x="-10" y="-180"
+                      style={{ overflow: 'visible' }}
+                    >
+                      {/*
+                        FIX FOR COLLAPSE: The outer wrapper has pointerEvents: 'none' so the
+                        transparent/empty area of the foreignObject never blocks clicks on
+                        neighboring nodes. Only elements with data-interactive="true" are clickable.
+                      */}
+                      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', paddingLeft: 10, position: 'relative', pointerEvents: 'none' }}>
+
+                        {/* Floating toolbar (selected state) */}
+                        {isSelected && !isEditing && !isReadOnly && (
+                          <div
+                            data-interactive="true"
+                            onMouseDown={e => e.stopPropagation()}
+                            style={{
+                              position: 'absolute', bottom: 'calc(50% + 32px)', left: 10,
+                              display: 'flex', alignItems: 'center', gap: 1,
+                              background: '#1C1917', border: '1px solid rgba(255,255,255,0.12)',
+                              borderRadius: 10, padding: '3px 5px', zIndex: 999,
+                              boxShadow: '0 6px 22px rgba(0,0,0,0.45)',
+                              pointerEvents: 'auto', whiteSpace: 'nowrap',
+                            }}
+                          >
+                            <ToolbarBtn onClick={() => handleAddChild(node.data.id!)} label="Adicionar">
+                              <Plus size={12} />
+                            </ToolbarBtn>
+                            <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.14)', margin: '0 3px' }} />
+                            <ToolbarBtn onClick={e => {
+                              const card = (e.target as HTMLElement).closest('[data-interactive]')?.querySelector('[data-card]') ?? undefined;
+                              startEdit(node.data, card as Element | undefined, { hasLightText, branchColor: baseBranchColor ?? '#7B61FF' });
+                            }}>
+                              <Pencil size={13} />
+                            </ToolbarBtn>
+                            {!isRoot && (
+                              <ToolbarBtn onClick={() => handleDelete(node.data.id!)} danger>
+                                <Trash2 size={13} />
+                              </ToolbarBtn>
+                            )}
+                          </div>
+                        )}
+
+                        {/* Card wrapper */}
+                        <div style={{ position: 'relative', display: 'inline-flex', alignItems: 'center', pointerEvents: 'auto' }} data-interactive="true">
+
+
+
+                          {/* Card */}
+                          <div
+                            data-card="true"
+                            style={{
+                              background: bg, color: textColor, border: nodeBorder, boxShadow: nodeShadow,
+                              borderRadius, padding: `${py}px ${px}px`,
+                              cursor: 'pointer',
+                              transition: 'background 0.25s, box-shadow 0.15s',
+                              transform: isRoot ? 'scale(1.06)' : undefined,
+                              maxWidth: 240, minWidth: isRoot ? 100 : 64,
+                              // Subtle highlight when this node is being edited
+                              outline: isEditing ? `2px solid ${resolvedAccent ?? '#0090FF'}` : 'none',
+                              outlineOffset: 2,
+                            }}
+                            onClick={e => {
+                              e.stopPropagation();
+                              if (!isEditing) setSelectedId(prev => prev === node.data.id ? null : node.data.id!);
+                            }}
+                            onDoubleClick={e => {
+                              e.stopPropagation();
+                              if (!isReadOnly) {
+                                setSelectedId(node.data.id!);
+                                startEdit(node.data, e.currentTarget, { hasLightText, branchColor: baseBranchColor ?? '#7B61FF' });
+                              }
+                            }}
+                          >
+                            {/* Read view — always shown; editing happens in the popup */}
+                            <div>
+                              <div style={{ fontSize: isRoot ? 14 : 13, fontWeight: isRoot ? 700 : 600, whiteSpace: 'nowrap', lineHeight: 1.3 }}>
+                                {node.data.title}
+                              </div>
+                              {node.data.content && (
+                                <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.55, color: hasLightText ? 'rgba(255,255,255,0.82)' : t.leafContentColor, maxWidth: 200, whiteSpace: 'normal' }}>
+                                  <ReactMarkdown>{node.data.content}</ReactMarkdown>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Collapse / expand button
+                              FIX: uses onMouseDown to prevent canvas drag stealing the event,
+                              and is positioned within the interactive wrapper so pointerEvents work correctly */}
+                          {childCount > 0 && !isEditing && (
+                            <button
+                              onMouseDown={e => { e.stopPropagation(); e.preventDefault(); }}
+                              onClick={e => { e.stopPropagation(); toggleCollapse(node.data.id!); }}
+                              title={isCollapsed ? 'Expandir' : 'Recolher'}
+                              style={{
+                                position: 'absolute', right: -13, top: '50%',
+                                transform: 'translateY(-50%)',
+                                width: 22, height: 22, borderRadius: '50%',
+                                border: `2.5px solid ${resolvedAccent ?? t.collapseNeutralBorder}`,
+                                background: isCollapsed ? (resolvedAccent ?? '#7B61FF') : t.collapseBg,
+                                color: isCollapsed ? 'white' : (resolvedAccent ?? t.collapseNeutralDot),
+                                fontSize: 8, fontWeight: 800,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                cursor: 'pointer', boxShadow: t.collapseShadow,
+                                transition: 'all 0.18s ease', zIndex: 10,
+                              }}
+                            >
+                              {isCollapsed
+                                ? <span style={{ fontSize: 8, fontWeight: 800, lineHeight: 1 }}>{childCount}</span>
+                                : <div style={{ width: 6, height: 6, borderRadius: '50%', background: resolvedAccent ?? t.collapseNeutralDot }} />
+                              }
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </foreignObject>
+                  </motion.g>
+                );
+              })}
+            </AnimatePresence>
+          </g>
+        </svg>
+      </div>
+
+      {/* ── Edit popup — fixed, centered on viewport ── */}
+      <AnimatePresence>
+        {editingId && (() => {
+          const accentColor = editColor ?? editNodeAccent.branchColor;
+          return (
+            <>
+              {/* Backdrop */}
+              <motion.div
+                key="edit-backdrop"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.15 }}
+                onMouseDown={cancelEdit}
+                style={{
+                  position: 'fixed', inset: 0, zIndex: 1000,
+                  background: isDark ? 'rgba(0,0,0,0.55)' : 'rgba(0,0,0,0.25)',
+                  backdropFilter: 'blur(2px)',
+                }}
+              />
+
+              {/* Panel */}
+              <motion.div
+                key="edit-popup"
+                initial={{ opacity: 0, scale: 0.96 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.96 }}
+                transition={{ duration: 0.18, ease: 'easeOut' }}
+                onMouseDown={e => e.stopPropagation()}
+                onClick={e => e.stopPropagation()}
+                style={{
+                  position: 'fixed',
+                  top: '50%', left: '50%',
+                  x: '-50%', y: '-50%',
+                  width: 'min(520px, calc(100vw - 48px))',
+                  zIndex: 1001,
+                  background: t.chromeBg,
+                  border: `1px solid ${t.chromeBorder}`,
+                  borderRadius: 20,
+                  boxShadow: isDark
+                    ? '0 32px 80px rgba(0,0,0,0.75), 0 4px 20px rgba(0,0,0,0.5)'
+                    : '0 32px 80px rgba(0,0,0,0.20), 0 4px 20px rgba(0,0,0,0.08)',
+                  padding: '24px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 16,
+                  maxHeight: 'calc(100vh - 48px)',
+                  overflowY: 'auto',
+                }}
+              >
+                {/* Header */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: t.chromeColor, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+                    Editar nó
+                  </span>
+                  <button
+                    onClick={cancelEdit}
+                    style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: t.chromeColor, padding: 4, display: 'flex', borderRadius: 6 }}
+                    onMouseEnter={e => { e.currentTarget.style.background = t.chromeHover; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                      <path d="M2 2l10 10M12 2L2 12" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/>
+                    </svg>
+                  </button>
+                </div>
+
+                <div style={{ height: 1, background: t.chromeDivider, margin: '0 -24px' }} />
+
+                {/* Title */}
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 600, color: t.chromeColor, letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
+                    Título
+                  </label>
+                  <input
+                    ref={editInputRef}
+                    value={editTitle}
+                    onChange={e => setEditTitle(e.target.value)}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); saveEdit(); }
+                      if (e.key === 'Escape') cancelEdit();
+                    }}
+                    placeholder="Título do nó"
+                    style={{
+                      width: '100%', boxSizing: 'border-box',
+                      background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                      border: `1.5px solid ${t.chromeBorder}`,
+                      borderRadius: 10, padding: '10px 14px',
+                      fontSize: 15, fontWeight: 600,
+                      color: t.editTitleColor, outline: 'none',
+                      transition: 'border-color 0.15s',
+                    }}
+                    onFocus={e => { e.currentTarget.style.borderColor = accentColor; }}
+                    onBlur={e => { e.currentTarget.style.borderColor = t.chromeBorder; }}
+                  />
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 600, color: t.chromeColor, letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
+                    Notas
+                  </label>
+                  <textarea
+                    value={editContent}
+                    onChange={e => setEditContent(e.target.value)}
+                    onKeyDown={e => { if (e.key === 'Escape') cancelEdit(); }}
+                    placeholder="Anotações em Markdown..."
+                    rows={5}
+                    style={{
+                      width: '100%', boxSizing: 'border-box',
+                      background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                      border: `1.5px solid ${t.chromeBorder}`,
+                      borderRadius: 10, padding: '10px 14px',
+                      fontSize: 13, color: t.editContentColor,
+                      outline: 'none', resize: 'vertical', lineHeight: 1.6,
+                      fontFamily: 'inherit',
+                      transition: 'border-color 0.15s',
+                    }}
+                    onFocus={e => { e.currentTarget.style.borderColor = accentColor; }}
+                    onBlur={e => { e.currentTarget.style.borderColor = t.chromeBorder; }}
+                  />
+                </div>
+
+                {/* Color */}
+                <div>
+                  <label style={{ fontSize: 10, fontWeight: 600, color: t.chromeColor, letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
+                    Cor
+                  </label>
+                  <ColorPrism
+                    value={editColor}
+                    defaultColor={editNodeAccent.branchColor}
+                    onChange={setEditColor}
+                    hasLightText={false}
+                    inputBorder={t.inputBorderLeaf}
+                    editTitleClr={t.editTitleColor}
+                    hexLabelClr={t.hexLabelColor}
+                  />
+                </div>
+
+                <div style={{ height: 1, background: t.chromeDivider, margin: '0 -24px' }} />
+
+                {/* Actions */}
+                <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+                  <button
+                    onClick={cancelEdit}
+                    style={{
+                      padding: '9px 20px', fontSize: 13, fontWeight: 500,
+                      borderRadius: 10, cursor: 'pointer',
+                      background: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+                      border: `1px solid ${t.chromeBorder}`,
+                      color: t.editTitleColor, transition: 'background 0.12s',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.background = t.chromeHover; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'; }}
+                  >Cancelar</button>
+                  <button
+                    onClick={saveEdit}
+                    style={{
+                      padding: '9px 28px', fontSize: 13, fontWeight: 600,
+                      borderRadius: 10, cursor: 'pointer',
+                      background: accentColor,
+                      border: 'none', color: 'white',
+                      transition: 'opacity 0.12s',
+                    }}
+                    onMouseEnter={e => { e.currentTarget.style.opacity = '0.85'; }}
+                    onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
+                  >Salvar</button>
+                </div>
+              </motion.div>
+            </>
+          );
+        })()}
+      </AnimatePresence>
+
+      {/* Controls (bottom-right) */}
+      <div style={{ position: 'absolute', bottom: 20, right: 20, display: 'flex', flexDirection: 'column', gap: 6, zIndex: 20 }}>
+
+        {/* Zoom */}
+        <div style={{ ...chrome, borderRadius: 10, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          <ChromeBtn onClick={() => setZoom(z => Math.min(z * 1.2, 5))}><ZoomIn size={15} /></ChromeBtn>
+          <div style={{ height: 1, background: t.chromeDivider }} />
+          <ChromeBtn onClick={() => setZoom(z => Math.max(z * 0.83, 0.08))}><ZoomOut size={15} /></ChromeBtn>
+        </div>
+
+        {/* Reset */}
+        <button
+          onClick={resetView}
+          title="Resetar visão"
+          style={{ ...chrome, borderRadius: 10, padding: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.chromeColor, transition: 'background 0.12s' }}
+          onMouseEnter={e => { e.currentTarget.style.background = t.chromeHover; }}
+          onMouseLeave={e => { e.currentTarget.style.background = t.chromeBg; }}
+        >
+          <Maximize2 size={15} />
+        </button>
+
+        {/* Zoom % */}
+        <div style={{ ...chrome, borderRadius: 8, padding: '4px 8px', textAlign: 'center', fontSize: 11, color: t.chromeColor, fontWeight: 600, fontFamily: 'monospace', minWidth: 46 }}>
+          {Math.round(zoom * 100)}%
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default MindMap;
