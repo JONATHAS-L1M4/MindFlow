@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import * as d3 from 'd3';
 import { motion, AnimatePresence } from 'motion/react';
-import { ZoomIn, ZoomOut, Maximize2, Plus, Pencil, Trash2, RotateCcw } from 'lucide-react';
+import { ZoomIn, ZoomOut, Plus, Pencil, Trash2, RotateCcw } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { MindMapNode } from '../types';
 
@@ -1000,12 +1000,7 @@ const MindMap: React.FC<MindMapProps> = ({
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [focusTargetInView, nodes.length]);
-
-  const refreshLayoutView = useCallback(() => {
-    const targetId = selectedId ?? data.id!;
-    focusTargetInView({ id: targetId, scope: 'branch' });
-  }, [data.id, focusTargetInView, selectedId]);
+  }, [focusTargetInView, nodes.length, translate.x, translate.y, zoom]);
 
   // ── Canvas interaction (debounced) ────────────────────────────────────────
 
@@ -1030,7 +1025,12 @@ const MindMap: React.FC<MindMapProps> = ({
 
   const debouncedHandleWheel = useMemo(() => debounce(handleWheel, 16), [handleWheel]);
 
-  const resetView = useCallback(() => { setZoom(1); setTranslate({ x: 0, y: 0 }); }, []);
+  const refitView = useCallback(() => {
+    const targetId = selectedId ?? data.id!;
+    pendingFocusTargetRef.current = { id: targetId, scope: 'branch' };
+    setZoom(1);
+    setTranslate({ x: 0, y: 0 });
+  }, [data.id, selectedId]);
 
   // ── Chrome style ──────────────────────────────────────────────────────────
 
@@ -1386,19 +1386,9 @@ const MindMap: React.FC<MindMapProps> = ({
         </div>
 
         <button
-          onClick={resetView}
-          title="Resetar visão"
-          style={{ ...chrome, borderRadius: 10, padding: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.chromeColor, transition: 'background 0.12s' }}
-          onMouseEnter={e => { e.currentTarget.style.background = t.chromeHover; }}
-          onMouseLeave={e => { e.currentTarget.style.background = t.chromeBg; }}
-        >
-          <Maximize2 size={15} />
-        </button>
-
-        <button
-          onClick={refreshLayoutView}
-          title="Atualizar fluxo"
-          style={{ ...chrome, borderRadius: 10, padding: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.chromeColor, transition: 'background 0.12s' }}
+          onClick={refitView}
+          title="Recentralizar fluxo"
+          style={{ ...chrome, borderRadius: 10, padding: '8px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, color: t.chromeColor, transition: 'background 0.12s', fontSize: 12, fontWeight: 600 }}
           onMouseEnter={e => { e.currentTarget.style.background = t.chromeHover; }}
           onMouseLeave={e => { e.currentTarget.style.background = t.chromeBg; }}
         >
