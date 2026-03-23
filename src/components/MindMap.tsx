@@ -13,6 +13,13 @@ interface MindMapProps {
   onThemeChange?: (theme: 'light' | 'dark') => void;
 }
 
+type FocusTarget = {
+  id: string;
+  scope: 'node' | 'branch';
+};
+
+const DEFAULT_ROOT_COLOR = '#6366f1';
+
 // ─── Performance Helpers ───────────────────────────────────────────────────────
 
 const PERF_THRESHOLD = 500; // Se > 500 nós, ativa modo performance
@@ -38,6 +45,15 @@ const findNode = (root: MindMapNode, id: string): MindMapNode | null => {
   return null;
 };
 
+const findNodeDepth = (root: MindMapNode, id: string, depth = 0): number | null => {
+  if (root.id === id) return depth;
+  for (const child of root.children ?? []) {
+    const childDepth = findNodeDepth(child, id, depth + 1);
+    if (childDepth != null) return childDepth;
+  }
+  return null;
+};
+
 const removeNode = (root: MindMapNode, id: string): boolean => {
   if (!root.children) return false;
   const idx = root.children.findIndex(c => c.id === id);
@@ -59,17 +75,57 @@ const countNodes = (node: MindMapNode): number => {
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(Math.max(value, min), max);
 
+let textMeasureCanvas: HTMLCanvasElement | null = null;
+let textMeasureContext: CanvasRenderingContext2D | null = null;
+
+const getTextMeasureContext = (): CanvasRenderingContext2D | null => {
+  if (typeof document === 'undefined') return null;
+  if (textMeasureContext) return textMeasureContext;
+
+  textMeasureCanvas = document.createElement('canvas');
+  textMeasureContext = textMeasureCanvas.getContext('2d');
+  return textMeasureContext;
+};
+
+const measureTextWidth = (text: string, font: string, fallbackFactor: number): number => {
+  if (!text) return 0;
+  const ctx = getTextMeasureContext();
+  if (!ctx) return text.length * fallbackFactor;
+  ctx.font = font;
+  return Math.ceil(ctx.measureText(text).width);
+};
+
+const getCardPaddingX = (depth: number): number => {
+  if (depth === 0) return 18;
+  if (depth === 1) return 16;
+  return 14;
+};
+
+const getCardPaddingY = (depth: number): number => {
+  if (depth === 0) return 11;
+  return 8;
+};
+
+const getContentInsetX = (depth: number): number => {
+  if (depth === 0) return 4;
+  return 3;
+};
+
+const getContentInsetRight = (depth: number): number => {
+  if (depth === 0) return 10;
+  return 8;
+};
+
 const estimateCardWidth = (node: MindMapNode, depth: number): number => {
-  const title = node.title ?? '';
-  const content = node.content ?? '';
-  const titleWidth = title.length * (depth === 0 ? 8.4 : 7.2);
-  const contentLines = content.split('\n').filter(Boolean);
-  const contentWidth = contentLines.length
-    ? Math.max(...contentLines.map(line => line.length)) * 5.8
-    : 0;
-  const padding = depth === 0 ? 52 : depth === 1 ? 42 : 34;
+  const title = (node.title ?? '').trim();
+  const titleFont = depth === 0
+    ? '700 14px system-ui, sans-serif'
+    : '600 13px system-ui, sans-serif';
+  const titleWidth = measureTextWidth(title, titleFont, depth === 0 ? 8.4 : 7.2);
+  const sidePadding = getCardPaddingX(depth) * 2 + getContentInsetX(depth) + getContentInsetRight(depth);
   const minWidth = depth === 0 ? 100 : 64;
-  return clamp(Math.max(minWidth, titleWidth, contentWidth) + padding, minWidth, 240);
+  const preferredWidth = Math.max(titleWidth + sidePadding, minWidth);
+  return clamp(preferredWidth, minWidth, 320);
 };
 
 const getExpandButtonAnchorY = (node: { y: number; depth: number; data: MindMapNode }): number => {
@@ -90,6 +146,20 @@ const estimateSubtreeWeight = (node: MindMapNode): number => {
   const children = node.children ?? [];
   if (children.length === 0) return 1;
   return children.reduce((sum, child) => sum + estimateSubtreeWeight(child), 0);
+};
+
+const getInheritedBranchColor = (
+  node: d3.HierarchyPointNode<MindMapNode>,
+  rootColor: string
+): string => {
+  if (node.depth === 0) return rootColor;
+
+  let current = node;
+  while (current.depth > 1 && current.parent) {
+    current = current.parent;
+  }
+
+  return current.depth === 1 ? (current.data.color ?? rootColor) : rootColor;
 };
 
 const estimateCardBounds = (node: { data: MindMapNode; depth: number; x: number; y: number }) => {
@@ -117,13 +187,6 @@ const getContrastColor = (hexColor: string): string => {
 };
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
-
-const BRANCH_COLORS = [
-  '#7B61FF', '#FF8C00', '#00C875', '#FF3B30',
-  '#0090FF', '#A259FF', '#FF6B35', '#00BCD4',
-] as const;
-
-const branchColor = (idx: number) => BRANCH_COLORS[idx % BRANCH_COLORS.length];
 
 // ─── Theme tokens ─────────────────────────────────────────────────────────────
 
@@ -429,8 +492,12 @@ const NodeComponent = React.memo<NodeProps>(({
   isCollapsed, hasLightText, animationEnabled, resolvedAccent,
 }) => {
   const borderRadius = isRoot ? 14 : 10;
-  const px = isRoot ? 22 : node.depth === 1 ? 18 : 14;
-  const py = isRoot ? 11 : 8;
+  const px = getCardPaddingX(node.depth);
+  const py = getCardPaddingY(node.depth);
+  const contentInsetX = getContentInsetX(node.depth);
+  const contentInsetRight = getContentInsetRight(node.depth);
+  const cardWidth = estimateCardWidth(node.data, node.depth);
+  const contentMaxWidth = Math.max(cardWidth - px * 2 - contentInsetX - contentInsetRight, 80);
 
   const initialProps = animationEnabled
     ? { opacity: 0, scale: 0.55, x: node.parent?.y ?? node.y, y: node.parent?.x ?? node.x }
@@ -470,7 +537,7 @@ const NodeComponent = React.memo<NodeProps>(({
                 <Plus size={12} />
               </ToolbarBtn>
               <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.14)', margin: '0 3px' }} />
-              <ToolbarBtn onClick={() => onEdit(node.data, { hasLightText, branchColor: baseBranchColor ?? '#7B61FF' })}>
+              <ToolbarBtn onClick={() => onEdit(node.data, { hasLightText, branchColor: baseBranchColor ?? DEFAULT_ROOT_COLOR })}>
                 <Pencil size={13} />
               </ToolbarBtn>
               {!isRoot && (
@@ -490,7 +557,8 @@ const NodeComponent = React.memo<NodeProps>(({
                 cursor: 'pointer',
                 transition: 'background 0.25s, box-shadow 0.15s',
                 transform: isRoot ? 'scale(1.06)' : undefined,
-                maxWidth: 240, minWidth: isRoot ? 100 : 64,
+                width: cardWidth,
+                maxWidth: cardWidth, minWidth: cardWidth,
                 outline: isEditing ? `2px solid ${resolvedAccent ?? '#0090FF'}` : 'none',
                 outlineOffset: 2,
               }}
@@ -501,15 +569,40 @@ const NodeComponent = React.memo<NodeProps>(({
               onDoubleClick={e => {
                 e.stopPropagation();
                 if (isReadOnly) return;
-                onEdit(node.data, { hasLightText, branchColor: baseBranchColor ?? '#7B61FF' });
+                onEdit(node.data, { hasLightText, branchColor: baseBranchColor ?? DEFAULT_ROOT_COLOR });
               }}
             >
-              <div>
-                <div style={{ fontSize: isRoot ? 14 : 13, fontWeight: isRoot ? 700 : 600, whiteSpace: 'nowrap', lineHeight: 1.3 }}>
+              <div style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                paddingLeft: contentInsetX,
+                paddingRight: contentInsetRight,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'flex-start',
+                textAlign: 'left',
+              }}>
+                <div style={{
+                  fontSize: isRoot ? 14 : 13,
+                  fontWeight: isRoot ? 700 : 600,
+                  whiteSpace: 'nowrap',
+                  lineHeight: 1.3,
+                  maxWidth: '100%',
+                  textAlign: 'left',
+                }}>
                   {node.data.title}
                 </div>
                 {node.data.content && (
-                  <div style={{ marginTop: 4, fontSize: 11, lineHeight: 1.55, color: hasLightText ? 'rgba(255,255,255,0.82)' : t.leafContentColor, maxWidth: 200, whiteSpace: 'normal' }}>
+                  <div style={{
+                    marginTop: 4,
+                    fontSize: 11,
+                    lineHeight: 1.55,
+                    color: hasLightText ? 'rgba(255,255,255,0.82)' : t.leafContentColor,
+                    maxWidth: contentMaxWidth,
+                    whiteSpace: 'normal',
+                    width: '100%',
+                    textAlign: 'left',
+                  }}>
                     <ReactMarkdown>{node.data.content}</ReactMarkdown>
                   </div>
                 )}
@@ -526,7 +619,7 @@ const NodeComponent = React.memo<NodeProps>(({
                   transform: 'translateY(-50%)',
                   width: 20, height: 20, borderRadius: '50%',
                   border: `2.5px solid ${resolvedAccent ?? t.collapseNeutralBorder}`,
-                  background: isCollapsed ? (resolvedAccent ?? '#7B61FF') : t.collapseBg,
+                  background: isCollapsed ? (resolvedAccent ?? baseBranchColor ?? DEFAULT_ROOT_COLOR) : t.collapseBg,
                   color: isCollapsed ? 'white' : (resolvedAccent ?? t.collapseNeutralDot),
                   fontSize: 8, fontWeight: 800,
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -553,6 +646,8 @@ const NodeComponent = React.memo<NodeProps>(({
     prev.isReadOnly === next.isReadOnly &&
     prev.isCollapsed === next.isCollapsed &&
     prev.node.data.id === next.node.data.id &&
+    prev.node.x === next.node.x &&
+    prev.node.y === next.node.y &&
     prev.node.data.title === next.node.data.title &&
     prev.node.data.content === next.node.data.content &&
     prev.customColor === next.customColor &&
@@ -604,6 +699,7 @@ const MindMap: React.FC<MindMapProps> = ({
   const activeTheme: ThemeKey = themeProp ?? internalTheme;
   const t = THEMES[activeTheme];
   const isDark = activeTheme === 'dark';
+  const rootColor = data.color ?? DEFAULT_ROOT_COLOR;
 
   const [collapsedIds, setCollapsedIds] = useState<Set<string>>(new Set());
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -612,14 +708,14 @@ const MindMap: React.FC<MindMapProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const pendingFocusNodeIdRef = useRef<string | null>(null);
+  const pendingFocusTargetRef = useRef<FocusTarget | null>(null);
 
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
   const [editColor, setEditColor] = useState<string | null>(null);
-  const [editNodeAccent, setEditNodeAccent] = useState<{ branchColor: string }>({ branchColor: '#7B61FF' });
+  const [editNodeAccent, setEditNodeAccent] = useState<{ branchColor: string }>({ branchColor: rootColor });
   const editInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -638,7 +734,7 @@ const MindMap: React.FC<MindMapProps> = ({
     if (!parent.children) parent.children = [];
     const newId = generateId();
     parent.children.push({ id: newId, title: 'Nova ideia' });
-    pendingFocusNodeIdRef.current = newId;
+    pendingFocusTargetRef.current = { id: newId, scope: 'node' };
     onChange?.(newData);
     setCollapsedIds(prev => { const n = new Set(prev); n.delete(parentId); return n; });
     setSelectedId(null);
@@ -661,33 +757,43 @@ const MindMap: React.FC<MindMapProps> = ({
 
   const startEdit = useCallback((node: MindMapNode, accent?: { hasLightText: boolean; branchColor: string }) => {
     if (isReadOnly) return;
+    const isRootNode = node.id === data.id;
     setEditingId(node.id!);
     setEditTitle(node.title);
     setEditContent(node.content || '');
-    setEditColor(node.color ?? null);
-    if (accent) setEditNodeAccent({ branchColor: accent.branchColor });
+    setEditColor(isRootNode ? null : node.color ?? null);
+    setEditNodeAccent({ branchColor: accent?.branchColor ?? rootColor });
     setTimeout(() => { editInputRef.current?.focus(); editInputRef.current?.select(); }, 60);
-  }, [isReadOnly]);
+  }, [data.id, isReadOnly, rootColor]);
 
   const saveEdit = useCallback(() => {
     if (!editingId) return;
-    pendingFocusNodeIdRef.current = editingId;
+    const editingNodeDepth = findNodeDepth(data, editingId);
+    const canEditColor = editingNodeDepth === 1;
+    pendingFocusTargetRef.current = { id: editingId, scope: 'node' };
     const newData = JSON.parse(JSON.stringify(data));
     const node = findNode(newData, editingId);
     if (node) {
       node.title = editTitle.trim() || 'Sem título';
       if (editContent.trim()) node.content = editContent; else delete node.content;
-      if (editColor) node.color = editColor; else delete node.color;
+      if (canEditColor && editColor && editColor.toLowerCase() !== rootColor.toLowerCase()) {
+        node.color = editColor;
+      } else {
+        if (editingId !== data.id) {
+          delete node.color;
+        }
+      }
     }
     onChange?.(newData);
     setEditingId(null);
-  }, [editingId, editTitle, editContent, editColor, data, onChange]);
+  }, [editingId, editTitle, editContent, editColor, data, onChange, rootColor]);
 
   const cancelEdit = useCallback(() => {
     setEditingId(null);
   }, []);
 
   const toggleCollapse = useCallback((id: string) => {
+    pendingFocusTargetRef.current = { id, scope: 'branch' };
     setCollapsedIds(prev => {
       const n = new Set(prev);
       if (n.has(id)) n.delete(id); else n.add(id);
@@ -737,53 +843,79 @@ const MindMap: React.FC<MindMapProps> = ({
 
   const cx = (containerRef.current?.clientWidth ?? window.innerWidth) / 3;
   const cy = (containerRef.current?.clientHeight ?? window.innerHeight) / 2;
+  const editingNode = editingId ? (nodes.find(node => node.data.id === editingId) ?? null) : null;
+  const isEditingRoot = editingNode?.depth === 0;
+  const isEditingBranchRoot = editingNode?.depth === 1;
+  const editingBaseColor = editingNode ? getInheritedBranchColor(editingNode, rootColor) : rootColor;
+
+  const focusTargetInView = useCallback((focusTarget: FocusTarget) => {
+    const container = containerRef.current;
+    if (!container || nodes.length === 0) return;
+
+    const focusNode = nodes.find(node => node.data.id === focusTarget.id);
+    if (!focusNode) return;
+
+    const targetNodes = focusTarget.scope === 'branch'
+      ? focusNode.descendants()
+      : [focusNode];
+    const bounds = targetNodes.reduce((acc, node) => {
+      const nodeBounds = estimateCardBounds(node);
+      return {
+        left: Math.min(acc.left, nodeBounds.left),
+        right: Math.max(acc.right, nodeBounds.right),
+        top: Math.min(acc.top, nodeBounds.top),
+        bottom: Math.max(acc.bottom, nodeBounds.bottom),
+      };
+    }, {
+      left: Number.POSITIVE_INFINITY,
+      right: Number.NEGATIVE_INFINITY,
+      top: Number.POSITIVE_INFINITY,
+      bottom: Number.NEGATIVE_INFINITY,
+    });
+
+    const viewLeft = -translate.x / zoom - cx;
+    const viewTop = -translate.y / zoom - cy;
+    const viewWidth = container.clientWidth / zoom;
+    const viewHeight = container.clientHeight / zoom;
+    const marginX = 80;
+    const marginY = 56;
+
+    let nextTranslateX = translate.x;
+    let nextTranslateY = translate.y;
+
+    if (bounds.left < viewLeft + marginX) {
+      nextTranslateX += ((viewLeft + marginX) - bounds.left) * zoom;
+    } else if (bounds.right > viewLeft + viewWidth - marginX) {
+      nextTranslateX -= (bounds.right - (viewLeft + viewWidth - marginX)) * zoom;
+    }
+
+    if (bounds.top < viewTop + marginY) {
+      nextTranslateY += ((viewTop + marginY) - bounds.top) * zoom;
+    } else if (bounds.bottom > viewTop + viewHeight - marginY) {
+      nextTranslateY -= (bounds.bottom - (viewTop + viewHeight - marginY)) * zoom;
+    }
+
+    if (nextTranslateX !== translate.x || nextTranslateY !== translate.y) {
+      setTranslate({ x: nextTranslateX, y: nextTranslateY });
+    }
+  }, [cx, cy, nodes, translate, zoom]);
 
   useEffect(() => {
-    const focusNodeId = pendingFocusNodeIdRef.current;
-    if (!focusNodeId || nodes.length === 0) return;
+    const focusTarget = pendingFocusTargetRef.current;
+    if (!focusTarget || nodes.length === 0) return;
 
     const frame = window.requestAnimationFrame(() => {
-      const container = containerRef.current;
-      if (!container) return;
-
-      const focusNode = nodes.find(node => node.data.id === focusNodeId);
-      if (!focusNode) {
-        pendingFocusNodeIdRef.current = null;
-        return;
-      }
-
-      const bounds = estimateCardBounds(focusNode);
-      const viewLeft = -translate.x / zoom - cx;
-      const viewTop = -translate.y / zoom - cy;
-      const viewWidth = container.clientWidth / zoom;
-      const viewHeight = container.clientHeight / zoom;
-      const marginX = 80;
-      const marginY = 56;
-
-      let nextTranslateX = translate.x;
-      let nextTranslateY = translate.y;
-
-      if (bounds.left < viewLeft + marginX) {
-        nextTranslateX += ((viewLeft + marginX) - bounds.left) * zoom;
-      } else if (bounds.right > viewLeft + viewWidth - marginX) {
-        nextTranslateX -= (bounds.right - (viewLeft + viewWidth - marginX)) * zoom;
-      }
-
-      if (bounds.top < viewTop + marginY) {
-        nextTranslateY += ((viewTop + marginY) - bounds.top) * zoom;
-      } else if (bounds.bottom > viewTop + viewHeight - marginY) {
-        nextTranslateY -= (bounds.bottom - (viewTop + viewHeight - marginY)) * zoom;
-      }
-
-      if (nextTranslateX !== translate.x || nextTranslateY !== translate.y) {
-        setTranslate({ x: nextTranslateX, y: nextTranslateY });
-      }
-
-      pendingFocusNodeIdRef.current = null;
+      focusTargetInView(focusTarget);
+      pendingFocusTargetRef.current = null;
     });
 
     return () => window.cancelAnimationFrame(frame);
-  }, [cx, cy, nodes, translate, zoom]);
+  }, [focusTargetInView, nodes.length]);
+
+  const refreshLayoutView = useCallback(() => {
+    const targetId = selectedId ?? data.id!;
+    focusTargetInView({ id: targetId, scope: 'branch' });
+  }, [data.id, focusTargetInView, selectedId]);
 
   // ── Canvas interaction (debounced) ────────────────────────────────────────
 
@@ -865,13 +997,7 @@ const MindMap: React.FC<MindMapProps> = ({
             {/* Links */}
             <AnimatePresence>
               {links.map(link => {
-                const bIdx = branchIndexMap.get(link.target.data.id!);
-                const resolveStroke = (node: typeof link.target): string => {
-                  if (node.data.color) return node.data.color;
-                  if (node.parent && node.parent.data.id) return resolveStroke(node.parent);
-                  return bIdx != null ? branchColor(bIdx) : t.linkNeutral;
-                };
-                const stroke = resolveStroke(link.target);
+                const stroke = getInheritedBranchColor(link.target, rootColor);
                 const sw = link.target.depth === 1 ? 2.2 : 1.4;
                 const sy = getExpandButtonAnchorY(link.source), sx = link.source.x;
                 const ty = link.target.y, tx = link.target.x;
@@ -894,8 +1020,8 @@ const MindMap: React.FC<MindMapProps> = ({
             <AnimatePresence>
               {nodes.map(node => {
                 const bIdx = branchIndexMap.get(node.data.id!) ?? null;
-                const baseBranchColor = bIdx != null ? branchColor(bIdx) : null;
-                const customColor = node.data.color ?? null;
+                const baseBranchColor = getInheritedBranchColor(node, rootColor);
+                const customColor = node.depth === 1 ? (node.data.color ?? null) : null;
                 const resolvedAccent = customColor ?? baseBranchColor;
 
                 const isRoot = node.depth === 0;
@@ -907,12 +1033,12 @@ const MindMap: React.FC<MindMapProps> = ({
                 let bg: string, textColor: string, nodeBorder: string, nodeShadow: string;
 
                 if (isRoot) {
-                  bg = customColor ?? t.rootBg;
-                  textColor = customColor ? getContrastColor(customColor) : t.rootText;
+                  bg = rootColor;
+                  textColor = getContrastColor(rootColor);
                   nodeBorder = 'none';
                   nodeShadow = 'none';
                 } else if (node.depth === 1) {
-                  bg = customColor ?? baseBranchColor ?? '#7B61FF';
+                  bg = customColor ?? baseBranchColor ?? DEFAULT_ROOT_COLOR;
                   textColor = getContrastColor(bg);
                   nodeBorder = 'none';
                   nodeShadow = 'none';
@@ -968,7 +1094,7 @@ const MindMap: React.FC<MindMapProps> = ({
       {/* ── Edit popup ── */}
       <AnimatePresence>
         {editingId && (() => {
-          const accentColor = editColor ?? editNodeAccent.branchColor;
+          const accentColor = isEditingBranchRoot ? (editColor ?? editingBaseColor) : editingBaseColor;
           return (
             <>
               <motion.div
@@ -1085,15 +1211,36 @@ const MindMap: React.FC<MindMapProps> = ({
                   <label style={{ fontSize: 10, fontWeight: 600, color: t.chromeColor, letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
                     Cor
                   </label>
-                  <ColorPrism
-                    value={editColor}
-                    defaultColor={editNodeAccent.branchColor}
-                    onChange={setEditColor}
-                    hasLightText={false}
-                    inputBorder={t.inputBorderLeaf}
-                    editTitleClr={t.editTitleColor}
-                    hexLabelClr={t.hexLabelColor}
-                  />
+                  {isEditingBranchRoot ? (
+                    <ColorPrism
+                      value={editColor}
+                      defaultColor={rootColor}
+                      onChange={setEditColor}
+                      hasLightText={false}
+                      inputBorder={t.inputBorderLeaf}
+                      editTitleClr={t.editTitleColor}
+                      hexLabelClr={t.hexLabelColor}
+                    />
+                  ) : (
+                    <div style={{
+                      display: 'flex', alignItems: 'center', gap: 10,
+                      background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                      border: `1.5px solid ${t.chromeBorder}`,
+                      borderRadius: 10, padding: '10px 14px',
+                    }}>
+                      <div style={{
+                        width: 18, height: 18, borderRadius: '50%',
+                        background: editingBaseColor,
+                        border: `1px solid ${isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.12)'}`,
+                        flexShrink: 0,
+                      }} />
+                      <span style={{ fontSize: 12, color: t.editContentColor }}>
+                        {isEditingRoot
+                          ? 'A cor do nó central é fixa.'
+                          : 'A cor deste nó é herdada do nó raiz da ramificação e não pode ser editada aqui.'}
+                      </span>
+                    </div>
+                  )}
                 </div>
 
                 <div style={{ height: 1, background: t.chromeDivider, margin: '0 -24px' }} />
@@ -1156,6 +1303,16 @@ const MindMap: React.FC<MindMapProps> = ({
           onMouseLeave={e => { e.currentTarget.style.background = t.chromeBg; }}
         >
           <Maximize2 size={15} />
+        </button>
+
+        <button
+          onClick={refreshLayoutView}
+          title="Atualizar fluxo"
+          style={{ ...chrome, borderRadius: 10, padding: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: t.chromeColor, transition: 'background 0.12s' }}
+          onMouseEnter={e => { e.currentTarget.style.background = t.chromeHover; }}
+          onMouseLeave={e => { e.currentTarget.style.background = t.chromeBg; }}
+        >
+          <RotateCcw size={15} />
         </button>
 
         <div style={{ ...chrome, borderRadius: 8, padding: '4px 8px', textAlign: 'center', fontSize: 11, color: t.chromeColor, fontWeight: 600, fontFamily: 'monospace', minWidth: 46 }}>
