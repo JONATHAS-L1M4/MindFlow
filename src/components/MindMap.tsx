@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import * as d3 from 'd3';
 import { motion, AnimatePresence } from 'motion/react';
-import { ZoomIn, ZoomOut, Plus, Pencil, Trash2, RotateCcw } from 'lucide-react';
+import { ZoomIn, ZoomOut, Plus, Pencil, Trash2, RotateCcw, ChevronUp, ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { MindMapNode } from '../types';
 
@@ -79,6 +79,26 @@ const removeNode = (root: MindMapNode, id: string, parentDepth = 0): boolean => 
   for (const child of root.children) {
     if (removeNode(child, id, parentDepth + 1)) return true;
   }
+  return false;
+};
+
+const moveNodeWithinSiblings = (root: MindMapNode, id: string, direction: 'up' | 'down'): boolean => {
+  if (!root.children?.length) return false;
+
+  const currentIndex = root.children.findIndex(child => child.id === id);
+  if (currentIndex !== -1) {
+    const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1;
+    if (targetIndex < 0 || targetIndex >= root.children.length) return false;
+
+    const [movedNode] = root.children.splice(currentIndex, 1);
+    root.children.splice(targetIndex, 0, movedNode);
+    return true;
+  }
+
+  for (const child of root.children) {
+    if (moveNodeWithinSiblings(child, id, direction)) return true;
+  }
+
   return false;
 };
 
@@ -369,21 +389,31 @@ const ToolbarBtn: React.FC<{
   onClick: (e: React.MouseEvent) => void;
   danger?: boolean;
   label?: string;
+  disabled?: boolean;
   children: React.ReactNode;
-}> = ({ onClick, danger, label, children }) => (
+}> = ({ onClick, danger, label, disabled, children }) => (
   <button
     onMouseDown={e => { e.stopPropagation(); e.preventDefault(); }}
-    onClick={e => { e.stopPropagation(); onClick(e); }}
+    onClick={e => {
+      e.stopPropagation();
+      if (disabled) return;
+      onClick(e);
+    }}
     title={label}
+    disabled={disabled}
     style={{
       display: 'flex', alignItems: 'center', gap: 4,
       padding: label ? '4px 8px' : '4px 6px',
       borderRadius: 6, border: 'none',
       background: 'transparent', color: 'white',
-      cursor: 'pointer', fontSize: 12, fontWeight: 500,
+      cursor: disabled ? 'default' : 'pointer', fontSize: 12, fontWeight: 500,
       transition: 'background 0.1s',
+      opacity: disabled ? 0.35 : 1,
     }}
-    onMouseEnter={e => { e.currentTarget.style.background = danger ? 'rgba(220,38,38,0.55)' : 'rgba(255,255,255,0.14)'; }}
+    onMouseEnter={e => {
+      if (disabled) return;
+      e.currentTarget.style.background = danger ? 'rgba(220,38,38,0.55)' : 'rgba(255,255,255,0.14)';
+    }}
     onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
   >
     {children}
@@ -622,6 +652,7 @@ interface NodeProps {
   onEdit: (node: any, accent?: { hasLightText: boolean; branchColor: string }) => void;
   onDelete: (id: string) => void;
   onAddChild: (id: string) => void;
+  onMoveNode: (id: string, direction: 'up' | 'down') => void;
   onToggleCollapse: (id: string) => void;
   hasLightText: boolean;
   animationEnabled: boolean;
@@ -629,7 +660,7 @@ interface NodeProps {
 
 const NodeComponent = React.memo<NodeProps>(({
   node, isRoot, isSelected, isEditing, isReadOnly, childCount,
-  onSelect, onEdit, onDelete, onAddChild, onToggleCollapse,
+  onSelect, onEdit, onDelete, onAddChild, onMoveNode, onToggleCollapse,
   baseBranchColor, customColor, isDark, t, textColor, bg, nodeBorder, nodeShadow,
   isCollapsed, hasLightText, animationEnabled, resolvedAccent,
 }) => {
@@ -640,6 +671,10 @@ const NodeComponent = React.memo<NodeProps>(({
   const contentInsetRight = getContentInsetRight(node.depth);
   const cardWidth = estimateCardWidth(node.data, node.depth);
   const contentMaxWidth = Math.max(cardWidth - px * 2 - contentInsetX - contentInsetRight, 80);
+  const siblingIndex = node.parent?.children?.findIndex((child: any) => child.data.id === node.data.id) ?? -1;
+  const siblingCount = node.parent?.children?.length ?? 0;
+  const canMoveUp = !isRoot && siblingIndex > 0;
+  const canMoveDown = !isRoot && siblingIndex >= 0 && siblingIndex < siblingCount - 1;
 
   const initialProps = animationEnabled
     ? { opacity: 0, scale: 0.55, x: node.parent?.y ?? node.y, y: node.parent?.x ?? node.x }
@@ -679,6 +714,17 @@ const NodeComponent = React.memo<NodeProps>(({
                 <Plus size={12} />
               </ToolbarBtn>
               <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.14)', margin: '0 3px' }} />
+              {!isRoot && (
+                <>
+                  <ToolbarBtn onClick={() => onMoveNode(node.data.id!, 'up')} label="Subir" disabled={!canMoveUp}>
+                    <ChevronUp size={13} />
+                  </ToolbarBtn>
+                  <ToolbarBtn onClick={() => onMoveNode(node.data.id!, 'down')} label="Descer" disabled={!canMoveDown}>
+                    <ChevronDown size={13} />
+                  </ToolbarBtn>
+                  <div style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.14)', margin: '0 3px' }} />
+                </>
+              )}
               <ToolbarBtn onClick={() => onEdit(node.data, { hasLightText, branchColor: baseBranchColor ?? DEFAULT_ROOT_COLOR })}>
                 <Pencil size={13} />
               </ToolbarBtn>
@@ -975,6 +1021,17 @@ const MindMap: React.FC<MindMapProps> = ({
       return next;
     });
     setSelectedId(null);
+  }, [data, isReadOnly, onChange]);
+
+  const handleMoveNode = useCallback((id: string, direction: 'up' | 'down') => {
+    if (isReadOnly || id === data.id) return;
+    const newData = JSON.parse(JSON.stringify(data));
+    const moved = moveNodeWithinSiblings(newData, id, direction);
+    if (!moved) return;
+
+    pendingFocusTargetRef.current = { id, scope: 'node' };
+    onChange?.(newData);
+    setSelectedId(id);
   }, [data, isReadOnly, onChange]);
 
   const startEdit = useCallback((node: MindMapNode, accent?: { hasLightText: boolean; branchColor: string }) => {
@@ -1369,6 +1426,7 @@ const MindMap: React.FC<MindMapProps> = ({
                     onEdit={startEdit}
                     onDelete={handleDelete}
                     onAddChild={handleAddChild}
+                    onMoveNode={handleMoveNode}
                     onToggleCollapse={toggleCollapse}
                     hasLightText={hasLightText}
                     animationEnabled={!performanceMode}

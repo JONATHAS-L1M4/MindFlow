@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react';
+import type * as Monaco from 'monaco-editor';
 import MindMap from './components/MindMap';
 import { MindMapNode } from './types';
 import { Brain, Code, Eye, Play, Info, Edit2, Download, Upload, HelpCircle, X } from 'lucide-react';
@@ -69,9 +71,22 @@ export default function App() {
 
   const [jsonInput, setJsonInput] = useState(() => JSON.stringify(mindMapData, null, 2));
   const [error, setError] = useState<string | null>(null);
+  const [editorMarkers, setEditorMarkers] = useState<Monaco.editor.IMarker[]>([]);
+  const [cursorPosition, setCursorPosition] = useState({ lineNumber: 1, column: 1 });
   const [activeTab, setActiveTab] = useState<'viewer' | 'edit-map' | 'editor'>('viewer');
   const [isHelpOpen, setIsHelpOpen] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
+  const runUpdateRef = useRef<() => void>(() => {});
+  const runFormatRef = useRef<() => void>(() => {});
+  const canonicalJson = JSON.stringify(mindMapData, null, 2);
+  const isJsonDirty = jsonInput !== canonicalJson;
+  const jsonLineCount = jsonInput.split('\n').length;
+  const firstEditorMarker = editorMarkers[0] ?? null;
+  const validationMessage = firstEditorMarker
+    ? `Linha ${firstEditorMarker.startLineNumber}, coluna ${firstEditorMarker.startColumn}: ${firstEditorMarker.message}`
+    : null;
 
   useEffect(() => {
     localStorage.setItem('mindflow-data', JSON.stringify(mindMapData));
@@ -82,8 +97,10 @@ export default function App() {
     const updateTheme = (e: MediaQueryListEvent | MediaQueryList) => {
       if (e.matches) {
         document.documentElement.classList.add('dark');
+        setIsDarkMode(true);
       } else {
         document.documentElement.classList.remove('dark');
+        setIsDarkMode(false);
       }
     };
     
@@ -95,6 +112,13 @@ export default function App() {
     return () => mediaQuery.removeEventListener('change', listener);
   }, []);
 
+  const getInvalidJsonMessage = () => {
+    if (firstEditorMarker) {
+      return `JSON inválido na linha ${firstEditorMarker.startLineNumber}, coluna ${firstEditorMarker.startColumn}.`;
+    }
+    return 'JSON inválido. Verifique a estrutura.';
+  };
+
   const handleUpdate = () => {
     try {
       const parsed = JSON.parse(jsonInput);
@@ -103,8 +127,8 @@ export default function App() {
       setJsonInput(JSON.stringify(parsedWithIds, null, 2));
       setError(null);
       setActiveTab('viewer');
-    } catch (e) {
-      setError('JSON inválido. Verifique a estrutura.');
+    } catch {
+      setError(getInvalidJsonMessage());
     }
   };
 
@@ -137,13 +161,99 @@ export default function App() {
         setMindMapData(parsedWithIds);
         setJsonInput(JSON.stringify(parsedWithIds, null, 2));
         setError(null);
-      } catch (err) {
-        alert("Erro ao importar: Arquivo JSON inválido.");
+      } catch {
+        alert("Erro ao importar: arquivo JSON inválido.");
       }
     };
     reader.readAsText(file);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
+
+  const handleFormatJson = () => {
+    try {
+      const parsed = JSON.parse(jsonInput);
+      const formatted = JSON.stringify(parsed, null, 2);
+      setJsonInput(formatted);
+      setError(null);
+      requestAnimationFrame(() => {
+        editorRef.current?.getAction('editor.action.formatDocument')?.run().catch(() => undefined);
+      });
+    } catch {
+      setError(getInvalidJsonMessage());
+    }
+  };
+
+  const handleResetJson = () => {
+    setJsonInput(canonicalJson);
+    setError(null);
+  };
+
+  runUpdateRef.current = handleUpdate;
+  runFormatRef.current = handleFormatJson;
+
+  const handleEditorBeforeMount: BeforeMount = (monaco) => {
+    monaco.editor.defineTheme('mindflow-vscode-light', {
+      base: 'vs',
+      inherit: true,
+      rules: [],
+      colors: {
+        'editor.background': '#FAFAFA',
+        'editor.lineHighlightBackground': '#F4F4F5',
+        'editorLineNumber.foreground': '#A1A1AA',
+        'editorLineNumber.activeForeground': '#3F3F46',
+        'editor.selectionBackground': '#C7D2FE',
+        'editor.inactiveSelectionBackground': '#E4E4E7',
+        'editorIndentGuide.background1': '#E4E4E7',
+        'editorIndentGuide.activeBackground1': '#A1A1AA',
+      },
+    });
+    monaco.editor.defineTheme('mindflow-vscode-dark', {
+      base: 'vs-dark',
+      inherit: true,
+      rules: [],
+      colors: {
+        'editor.background': '#09090B',
+        'editor.lineHighlightBackground': '#18181B',
+        'editorLineNumber.foreground': '#52525B',
+        'editorLineNumber.activeForeground': '#E4E4E7',
+        'editor.selectionBackground': '#3730A3',
+        'editor.inactiveSelectionBackground': '#27272A',
+        'editorIndentGuide.background1': '#27272A',
+        'editorIndentGuide.activeBackground1': '#52525B',
+      },
+    });
+  };
+
+  const handleEditorMount: OnMount = (editor, monaco) => {
+    editorRef.current = editor;
+
+    const position = editor.getPosition();
+    if (position) {
+      setCursorPosition({ lineNumber: position.lineNumber, column: position.column });
+    }
+
+    editor.onDidChangeCursorPosition((event) => {
+      setCursorPosition({
+        lineNumber: event.position.lineNumber,
+        column: event.position.column,
+      });
+    });
+
+    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => runUpdateRef.current());
+    editor.addCommand(monaco.KeyMod.Shift | monaco.KeyMod.Alt | monaco.KeyCode.KeyF, () => runFormatRef.current());
+
+    if (activeTab === 'editor') {
+      editor.focus();
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab !== 'editor') return;
+    const focusEditor = window.setTimeout(() => {
+      editorRef.current?.focus();
+    }, 80);
+    return () => window.clearTimeout(focusEditor);
+  }, [activeTab]);
 
   return (
     <div className="h-screen w-full flex flex-col bg-zinc-50 dark:bg-zinc-950 font-sans overflow-hidden">
@@ -239,39 +349,110 @@ export default function App() {
         {/* Editor View */}
         <div 
           className={`h-full bg-white/90 dark:bg-zinc-900/90 backdrop-blur-md z-30 transition-all duration-500 ease-in-out flex-shrink-0 overflow-hidden border-zinc-200 dark:border-zinc-800 ${
-            activeTab === 'editor' ? 'w-1/2 border-l shadow-2xl' : 'w-0 border-l-0'
+            activeTab === 'editor' ? 'w-full md:w-[48vw] xl:w-[44vw] border-l shadow-2xl' : 'w-0 border-l-0'
           }`}
         >
-          <div className="h-full flex flex-col p-6 pt-24 gap-4 w-[50vw]">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-zinc-500 dark:text-zinc-400">
-                <Info size={16} />
-                <span className="text-sm truncate">Edite o JSON para atualizar o mapa.</span>
-              </div>
-              <div className="flex items-center gap-3 shrink-0">
-                <button
-                  onClick={handleUpdate}
-                  className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-2 rounded-xl text-sm font-medium hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 dark:shadow-none"
-                >
-                  <Play size={16} />
-                  Atualizar Mapa
-                </button>
-              </div>
-            </div>
-            
-            <div className="flex-1 relative">
-              <textarea
-                value={jsonInput}
-                onChange={(e) => setJsonInput(e.target.value)}
-                className="w-full h-full p-6 font-mono text-sm bg-zinc-50 dark:bg-zinc-950 text-zinc-800 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-800 rounded-2xl focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none transition-colors duration-300 shadow-inner"
-                spellCheck={false}
-              />
-              {error && (
-                <div className="absolute bottom-4 left-4 right-4 bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/50 text-red-600 dark:text-red-400 px-4 py-3 rounded-xl text-sm font-medium flex items-center gap-2">
-                  <Info size={16} />
-                  {error}
+          <div className="h-full flex flex-col px-4 pb-4 pt-24 md:px-6 md:pb-6 min-w-0">
+            <div className="flex-1 min-h-0 rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/95 dark:bg-zinc-950/95 shadow-xl overflow-hidden flex flex-col">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-zinc-200 dark:border-zinc-800 px-4 py-4">
+                <div className="min-w-0">
+                  <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Editor JSON</h2>
+                  <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+                    Edite, formate e aplique o JSON do mapa.
+                  </p>
                 </div>
-              )}
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    onClick={handleResetJson}
+                    className="px-3 py-2 rounded-xl text-sm font-medium border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-white dark:hover:bg-zinc-900 transition-colors"
+                  >
+                    Restaurar
+                  </button>
+                  <button
+                    onClick={handleFormatJson}
+                    className="px-3 py-2 rounded-xl text-sm font-medium border border-zinc-200 dark:border-zinc-700 text-zinc-600 dark:text-zinc-300 hover:bg-white dark:hover:bg-zinc-900 transition-colors"
+                  >
+                    Formatar
+                  </button>
+                  <button
+                    onClick={handleUpdate}
+                    disabled={Boolean(firstEditorMarker)}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-colors shadow-lg ${
+                      firstEditorMarker
+                        ? 'bg-zinc-200 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 shadow-none cursor-not-allowed'
+                        : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-indigo-200 dark:shadow-none'
+                    }`}
+                  >
+                    <Play size={16} />
+                    Atualizar Mapa
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 border-b border-zinc-200 dark:border-zinc-800 px-4 py-2 text-zinc-500 dark:text-zinc-400 bg-white/70 dark:bg-zinc-900/60">
+                <div className="flex items-center gap-2 text-xs md:text-sm">
+                  <Info size={15} />
+                  <span>`Ctrl/Cmd + S` salva e `Shift + Alt + F` formata.</span>
+                </div>
+              </div>
+
+              <div className="flex-1 min-h-0">
+                <Editor
+                  height="100%"
+                  defaultLanguage="json"
+                  path="mindmap.json"
+                  value={jsonInput}
+                  beforeMount={handleEditorBeforeMount}
+                  onMount={handleEditorMount}
+                  onChange={(value) => {
+                    setJsonInput(value ?? '');
+                    if (error) {
+                      setError(null);
+                    }
+                  }}
+                  onValidate={(markers) => setEditorMarkers(markers)}
+                  theme={isDarkMode ? 'mindflow-vscode-dark' : 'mindflow-vscode-light'}
+                  options={{
+                    automaticLayout: true,
+                    minimap: { enabled: false },
+                    lineNumbers: 'on',
+                    scrollBeyondLastLine: false,
+                    wordWrap: 'on',
+                    wrappingIndent: 'indent',
+                    tabSize: 2,
+                    insertSpaces: true,
+                    formatOnPaste: true,
+                    formatOnType: true,
+                    bracketPairColorization: { enabled: true },
+                    guides: {
+                      indentation: true,
+                      bracketPairs: true,
+                    },
+                    fontSize: 14,
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+                    padding: { top: 14, bottom: 14 },
+                    smoothScrolling: true,
+                    cursorBlinking: 'smooth',
+                    renderWhitespace: 'none',
+                    roundedSelection: true,
+                    overviewRulerBorder: false,
+                    glyphMargin: false,
+                  }}
+                />
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-zinc-200 dark:border-zinc-800 px-4 py-3 text-xs md:text-sm bg-white/70 dark:bg-zinc-900/60">
+                <div className={`text-sm ${error || firstEditorMarker ? 'text-red-600 dark:text-red-400' : 'text-zinc-500 dark:text-zinc-400'}`}>
+                  {error ?? validationMessage ?? 'JSON válido e pronto para atualizar o mapa.'}
+                </div>
+                <div className="flex items-center gap-3 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  <span>{isJsonDirty ? 'Alterado' : 'Salvo'}</span>
+                  <span>{jsonLineCount} linhas</span>
+                  <span>Ln {cursorPosition.lineNumber}</span>
+                  <span>Col {cursorPosition.column}</span>
+                  <span>{editorMarkers.length} alertas</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
