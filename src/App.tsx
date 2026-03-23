@@ -5,14 +5,6 @@ import { Brain, Code, Eye, Play, Info, Edit2, Download, Upload, HelpCircle, X } 
 
 const generateId = () => `node-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
-const ensureIds = (node: MindMapNode): MindMapNode => {
-  const newNode = { ...node, id: node.id || generateId() };
-  if (node.children) {
-    newNode.children = node.children.map(ensureIds);
-  }
-  return newNode;
-};
-
 const simpleInitialData: MindMapNode = {
   title: "Nova Ideia",
   content: "Comece a digitar aqui...",
@@ -26,16 +18,25 @@ const DEFAULT_ROOT_TEXT_COLOR = simpleInitialData.textColor ?? "#ffffff";
 const normalizeMindMap = (
   node: MindMapNode,
   lockedRootColor = DEFAULT_ROOT_COLOR,
-  depth = 0
+  depth = 0,
+  seenIds = new Set<string>()
 ): MindMapNode => {
+  let nextId = node.id?.trim();
+  if (!nextId || seenIds.has(nextId)) {
+    do {
+      nextId = generateId();
+    } while (seenIds.has(nextId));
+  }
+  seenIds.add(nextId);
+
   const normalized: MindMapNode = {
     ...node,
-    id: node.id || generateId(),
+    id: nextId,
   };
 
   if (normalized.children) {
     normalized.children = normalized.children.map(child =>
-      normalizeMindMap(child, lockedRootColor, depth + 1)
+      normalizeMindMap(child, lockedRootColor, depth + 1, seenIds)
     );
   }
 
@@ -97,7 +98,7 @@ export default function App() {
   const handleUpdate = () => {
     try {
       const parsed = JSON.parse(jsonInput);
-      const parsedWithIds = normalizeMindMap(parsed, mindMapData.color ?? DEFAULT_ROOT_COLOR);
+      const parsedWithIds = normalizeMindMap(parsed, parsed.color ?? DEFAULT_ROOT_COLOR);
       setMindMapData(parsedWithIds);
       setJsonInput(JSON.stringify(parsedWithIds, null, 2));
       setError(null);
@@ -108,7 +109,7 @@ export default function App() {
   };
 
   const handleMapChange = (newData: MindMapNode) => {
-    const normalizedData = normalizeMindMap(newData, mindMapData.color ?? DEFAULT_ROOT_COLOR);
+    const normalizedData = normalizeMindMap(newData, newData.color ?? DEFAULT_ROOT_COLOR);
     setMindMapData(normalizedData);
     setJsonInput(JSON.stringify(normalizedData, null, 2));
   };
@@ -132,7 +133,7 @@ export default function App() {
       try {
         const content = event.target?.result as string;
         const parsed = JSON.parse(content);
-        const parsedWithIds = normalizeMindMap(parsed, mindMapData.color ?? DEFAULT_ROOT_COLOR);
+        const parsedWithIds = normalizeMindMap(parsed, parsed.color ?? DEFAULT_ROOT_COLOR);
         setMindMapData(parsedWithIds);
         setJsonInput(JSON.stringify(parsedWithIds, null, 2));
         setError(null);

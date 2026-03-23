@@ -56,16 +56,27 @@ const findNodeDepth = (root: MindMapNode, id: string, depth = 0): number | null 
   return null;
 };
 
-const removeNode = (root: MindMapNode, id: string): boolean => {
+const removeNode = (root: MindMapNode, id: string, parentDepth = 0): boolean => {
   if (!root.children) return false;
   const idx = root.children.findIndex(c => c.id === id);
   if (idx !== -1) {
-    root.children.splice(idx, 1);
+    const removedNode = root.children[idx];
+    const promotedChildren = removedNode.children ?? [];
+
+    if (parentDepth === 0 && removedNode.color) {
+      promotedChildren.forEach(child => {
+        if (!child.color) {
+          child.color = removedNode.color;
+        }
+      });
+    }
+
+    root.children.splice(idx, 1, ...promotedChildren);
     if (root.children.length === 0) delete root.children;
     return true;
   }
   for (const child of root.children) {
-    if (removeNode(child, id)) return true;
+    if (removeNode(child, id, parentDepth + 1)) return true;
   }
   return false;
 };
@@ -236,6 +247,27 @@ const estimateSubtreeWeight = (node: MindMapNode): number => {
   return children.reduce((sum, child) => sum + estimateSubtreeWeight(child), 0);
 };
 
+const getCubicBezierPoint = (
+  p0: [number, number],
+  p1: [number, number],
+  p2: [number, number],
+  p3: [number, number],
+  t: number
+): [number, number] => {
+  const mt = 1 - t;
+  const mt2 = mt * mt;
+  const t2 = t * t;
+  const x = mt2 * mt * p0[0]
+    + 3 * mt2 * t * p1[0]
+    + 3 * mt * t2 * p2[0]
+    + t2 * t * p3[0];
+  const y = mt2 * mt * p0[1]
+    + 3 * mt2 * t * p1[1]
+    + 3 * mt * t2 * p2[1]
+    + t2 * t * p3[1];
+  return [x, y];
+};
+
 const getInheritedBranchColor = (
   node: d3.HierarchyPointNode<MindMapNode>,
   rootColor: string
@@ -390,7 +422,7 @@ const ColorPrism: React.FC<{
     const h = hexToHsv(active);
     setHsv(h);
     setHexInput(active.replace('#', ''));
-  }, [value]);
+  }, [active]);
 
   React.useEffect(() => {
     const cv = sbRef.current; if (!cv) return;
@@ -799,6 +831,7 @@ const MindMap: React.FC<MindMapProps> = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const pendingFocusTargetRef = useRef<FocusTarget | null>(null);
+  const [hoveredLinkId, setHoveredLinkId] = useState<string | null>(null);
 
   // Edit state
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -837,11 +870,59 @@ const MindMap: React.FC<MindMapProps> = ({
     }, 120);
   }, [data, isReadOnly, onChange]);
 
+  const handleInsertNodeBetween = useCallback((sourceId: string, targetId: string, targetDepth: number) => {
+    if (isReadOnly) return;
+    const newData = JSON.parse(JSON.stringify(data));
+    const source = findNode(newData, sourceId);
+    if (!source?.children?.length) return;
+
+    const targetIndex = source.children.findIndex(child => child.id === targetId);
+    if (targetIndex === -1) return;
+
+    const originalTarget = source.children[targetIndex];
+    const transferredColor = targetDepth === 1 ? (originalTarget.color ?? null) : null;
+    const newId = generateId();
+    const insertedNode: MindMapNode = {
+      id: newId,
+      title: 'Nova ideia',
+      children: [originalTarget],
+    };
+
+    if (transferredColor) {
+      insertedNode.color = transferredColor;
+      delete originalTarget.color;
+    }
+
+    source.children.splice(targetIndex, 1, insertedNode);
+    pendingFocusTargetRef.current = { id: newId, scope: 'node' };
+    onChange?.(newData);
+    setCollapsedIds(prev => {
+      const next = new Set(prev);
+      next.delete(sourceId);
+      next.delete(newId);
+      return next;
+    });
+    setHoveredLinkId(null);
+    setSelectedId(null);
+    setTimeout(() => {
+      setEditingId(newId);
+      setEditTitle('Nova ideia');
+      setEditContent('');
+      setEditColor(transferredColor);
+      setTimeout(() => { editInputRef.current?.focus(); editInputRef.current?.select(); }, 80);
+    }, 120);
+  }, [data, isReadOnly, onChange]);
+
   const handleDelete = useCallback((id: string) => {
     if (isReadOnly || id === data.id) return;
     const newData = JSON.parse(JSON.stringify(data));
     removeNode(newData, id);
     onChange?.(newData);
+    setCollapsedIds(prev => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
     setSelectedId(null);
   }, [data, isReadOnly, onChange]);
 
@@ -851,7 +932,7 @@ const MindMap: React.FC<MindMapProps> = ({
     setEditingId(node.id!);
     setEditTitle(node.title);
     setEditContent(node.content || '');
-    setEditColor(isRootNode ? null : node.color ?? null);
+    setEditColor(isRootNode ? (node.color ?? rootColor) : (node.color ?? null));
     setEditNodeAccent({ branchColor: accent?.branchColor ?? rootColor });
     setTimeout(() => { editInputRef.current?.focus(); editInputRef.current?.select(); }, 60);
   }, [data.id, isReadOnly, rootColor]);
@@ -859,14 +940,23 @@ const MindMap: React.FC<MindMapProps> = ({
   const saveEdit = useCallback(() => {
     if (!editingId) return;
     const editingNodeDepth = findNodeDepth(data, editingId);
-    const canEditColor = editingNodeDepth === 1;
     pendingFocusTargetRef.current = { id: editingId, scope: 'node' };
     const newData = JSON.parse(JSON.stringify(data));
     const node = findNode(newData, editingId);
     if (node) {
       node.title = editTitle.trim() || 'Sem título';
       if (editContent.trim()) node.content = editContent; else delete node.content;
-      if (canEditColor && editColor && editColor.toLowerCase() !== rootColor.toLowerCase()) {
+      if (editingNodeDepth === 0) {
+        const nextRootColor = editColor ?? DEFAULT_ROOT_COLOR;
+        node.color = nextRootColor;
+        if (nextRootColor.toLowerCase() !== rootColor.toLowerCase()) {
+          for (const child of newData.children ?? []) {
+            if (child.color?.toLowerCase() === rootColor.toLowerCase()) {
+              delete child.color;
+            }
+          }
+        }
+      } else if (editingNodeDepth === 1 && editColor && editColor.toLowerCase() !== rootColor.toLowerCase()) {
         node.color = editColor;
       } else {
         if (editingId !== data.id) {
@@ -1087,21 +1177,79 @@ const MindMap: React.FC<MindMapProps> = ({
             {/* Links */}
             <AnimatePresence>
               {links.map(link => {
+                const linkId = `${link.source.data.id}-${link.target.data.id}`;
                 const stroke = getInheritedBranchColor(link.target, rootColor);
                 const sw = link.target.depth === 1 ? 2.2 : 1.4;
                 const sy = getExpandButtonLinkStartY(link.source), sx = link.source.x;
                 const ty = link.target.y, tx = link.target.x;
                 const mx = (sy + ty) / 2;
+                const handleInsertFromLink = (e: React.MouseEvent<SVGElement>) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  handleInsertNodeBetween(link.source.data.id!, link.target.data.id!, link.target.depth);
+                };
+                const [buttonX, buttonY] = getCubicBezierPoint(
+                  [sy, sx],
+                  [mx, sx],
+                  [mx, tx],
+                  [ty, tx],
+                  0.5
+                );
+                const isLinkActive = hoveredLinkId === linkId;
                 return (
-                  <motion.path
-                    key={`${link.source.data.id}-${link.target.data.id}`}
-                    initial={{ pathLength: 0, opacity: 0 }}
-                    animate={{ pathLength: 1, opacity: 1 }}
-                    exit={{ pathLength: 0, opacity: 0 }}
-                    transition={performanceMode ? { duration: 0 } : { duration: 0.26, ease: 'easeOut' }}
-                    d={`M ${sy} ${sx} C ${mx} ${sx}, ${mx} ${tx}, ${ty} ${tx}`}
-                    fill="none" stroke={stroke} strokeWidth={sw} strokeLinecap="round"
-                  />
+                  <g key={linkId}>
+                    <motion.path
+                      initial={{ pathLength: 0, opacity: 0 }}
+                      animate={{ pathLength: 1, opacity: 1 }}
+                      exit={{ pathLength: 0, opacity: 0 }}
+                      transition={performanceMode ? { duration: 0 } : { duration: 0.26, ease: 'easeOut' }}
+                      d={`M ${sy} ${sx} C ${mx} ${sx}, ${mx} ${tx}, ${ty} ${tx}`}
+                      fill="none" stroke={stroke} strokeWidth={sw} strokeLinecap="round"
+                    />
+                    {!isReadOnly && (
+                      <path
+                        data-interactive="true"
+                        d={`M ${sy} ${sx} C ${mx} ${sx}, ${mx} ${tx}, ${ty} ${tx}`}
+                        fill="none"
+                        stroke="transparent"
+                        strokeWidth={20}
+                        style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                        onMouseDown={e => { e.stopPropagation(); e.preventDefault(); }}
+                        onClick={handleInsertFromLink}
+                        onMouseEnter={() => setHoveredLinkId(linkId)}
+                        onMouseLeave={() => setHoveredLinkId(prev => prev === linkId ? null : prev)}
+                      />
+                    )}
+                    {!isReadOnly && isLinkActive && (
+                      <g
+                        data-interactive="true"
+                        transform={`translate(${buttonX}, ${buttonY})`}
+                        style={{ cursor: 'pointer', pointerEvents: 'all' }}
+                        onMouseEnter={() => setHoveredLinkId(linkId)}
+                        onMouseLeave={() => setHoveredLinkId(prev => prev === linkId ? null : prev)}
+                        onMouseDown={e => { e.stopPropagation(); e.preventDefault(); }}
+                        onClick={handleInsertFromLink}
+                      >
+                        <circle
+                          r={16}
+                          fill="transparent"
+                          style={{ pointerEvents: 'all' }}
+                        />
+                        <circle
+                          r={11}
+                          fill={t.chromeBg}
+                          stroke={stroke}
+                          strokeWidth={1.8}
+                        />
+                        <path
+                          d="M -4 0 L 4 0 M 0 -4 L 0 4"
+                          stroke={stroke}
+                          strokeWidth={1.8}
+                          strokeLinecap="round"
+                        />
+                      </g>
+                    )}
+                  </g>
                 );
               })}
             </AnimatePresence>
@@ -1184,7 +1332,7 @@ const MindMap: React.FC<MindMapProps> = ({
       {/* ── Edit popup ── */}
       <AnimatePresence>
         {editingId && (() => {
-          const accentColor = isEditingBranchRoot ? (editColor ?? editingBaseColor) : editingBaseColor;
+          const accentColor = (isEditingBranchRoot || isEditingRoot) ? (editColor ?? editingBaseColor) : editingBaseColor;
           return (
             <>
               <motion.div
@@ -1297,41 +1445,22 @@ const MindMap: React.FC<MindMapProps> = ({
                   />
                 </div>
 
-                <div>
-                  <label style={{ fontSize: 10, fontWeight: 600, color: t.chromeColor, letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
-                    Cor
-                  </label>
-                  {isEditingBranchRoot ? (
+                {(isEditingBranchRoot || isEditingRoot) ? (
+                  <div>
+                    <label style={{ fontSize: 10, fontWeight: 600, color: t.chromeColor, letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
+                      Cor
+                    </label>
                     <ColorPrism
                       value={editColor}
-                      defaultColor={rootColor}
+                      defaultColor={isEditingRoot ? DEFAULT_ROOT_COLOR : rootColor}
                       onChange={setEditColor}
                       hasLightText={false}
                       inputBorder={t.inputBorderLeaf}
                       editTitleClr={t.editTitleColor}
                       hexLabelClr={t.hexLabelColor}
                     />
-                  ) : (
-                    <div style={{
-                      display: 'flex', alignItems: 'center', gap: 10,
-                      background: isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-                      border: `1.5px solid ${t.chromeBorder}`,
-                      borderRadius: 10, padding: '10px 14px',
-                    }}>
-                      <div style={{
-                        width: 18, height: 18, borderRadius: '50%',
-                        background: editingBaseColor,
-                        border: `1px solid ${isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.12)'}`,
-                        flexShrink: 0,
-                      }} />
-                      <span style={{ fontSize: 12, color: t.editContentColor }}>
-                        {isEditingRoot
-                          ? 'A cor do nó central é fixa.'
-                          : 'A cor deste nó é herdada do nó raiz da ramificação e não pode ser editada aqui.'}
-                      </span>
-                    </div>
-                  )}
-                </div>
+                  </div>
+                ) : null}
 
                 <div style={{ height: 1, background: t.chromeDivider, margin: '0 -24px' }} />
 
