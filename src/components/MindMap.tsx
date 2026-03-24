@@ -3,6 +3,7 @@ import * as d3 from 'd3';
 import { motion, AnimatePresence } from 'motion/react';
 import { ZoomIn, ZoomOut, Plus, Pencil, Trash2, RotateCcw, ChevronUp, ChevronDown } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { MindMapNode } from '../types';
 
 interface MindMapProps {
@@ -244,6 +245,27 @@ const estimateWrappedLineCount = (
   return lines;
 };
 
+const getMarkdownTextForLayout = (markdown: string): string => (
+  markdown
+    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```/g, '').trim())
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/^>\s?/gm, '')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '')
+    .replace(/^\s*\d+\.\s+/gm, '')
+    .replace(/^\s*[-*_]{3,}\s*$/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/\|/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+);
+
 const estimateCardWidth = (node: MindMapNode, depth: number): number => {
   return getCardWidth(depth);
 };
@@ -275,13 +297,123 @@ const estimateCardHeight = (node: MindMapNode, depth: number): number => {
   );
   const titleLineHeight = depth === 0 ? 18 : 17;
   const titleHeight = Math.max(titleLines, 1) * titleLineHeight;
+  const plainContent = hasContent ? getMarkdownTextForLayout(node.content ?? '') : '';
   const contentLines = hasContent
-    ? estimateWrappedLineCount(node.content ?? '', '400 11px system-ui, sans-serif', contentMaxWidth, 6.4)
+    ? estimateWrappedLineCount(plainContent, '400 11px system-ui, sans-serif', contentMaxWidth, 6.4)
     : 0;
   const contentHeight = hasContent ? Math.min(contentLines, 6) * 18 + 12 : 0;
   const verticalPadding = depth === 0 ? 28 : 20;
   return titleHeight + contentHeight + verticalPadding;
 };
+
+const createMarkdownComponents = (textColor: string, subtleColor: string) => ({
+  p: ({ children }: any) => <p style={{ margin: 0 }}>{children}</p>,
+  strong: ({ children }: any) => <strong style={{ fontWeight: 700 }}>{children}</strong>,
+  em: ({ children }: any) => <em style={{ fontStyle: 'italic' }}>{children}</em>,
+  del: ({ children }: any) => <del style={{ opacity: 0.85 }}>{children}</del>,
+  a: ({ href, children }: any) => (
+    <a
+      href={href}
+      target="_blank"
+      rel="noreferrer"
+      onClick={(event) => event.stopPropagation()}
+      style={{ color: textColor, textDecoration: 'underline', textUnderlineOffset: 2, fontWeight: 600 }}
+    >
+      {children}
+    </a>
+  ),
+  ul: ({ children }: any) => (
+    <ul style={{ margin: '4px 0 0', paddingLeft: 16 }}>
+      {children}
+    </ul>
+  ),
+  ol: ({ children }: any) => (
+    <ol style={{ margin: '4px 0 0', paddingLeft: 16 }}>
+      {children}
+    </ol>
+  ),
+  li: ({ children }: any) => (
+    <li style={{ margin: '2px 0' }}>
+      {children}
+    </li>
+  ),
+  blockquote: ({ children }: any) => (
+    <blockquote
+      style={{
+        margin: '4px 0 0',
+        paddingLeft: 8,
+        borderLeft: `2px solid ${subtleColor}`,
+        opacity: 0.92,
+      }}
+    >
+      {children}
+    </blockquote>
+  ),
+  code: ({ inline, children }: any) => (
+    inline ? (
+      <code
+        style={{
+          background: 'rgba(0,0,0,0.12)',
+          borderRadius: 4,
+          padding: '0 4px',
+          fontSize: '0.95em',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        }}
+      >
+        {children}
+      </code>
+    ) : (
+      <code
+        style={{
+          display: 'block',
+          whiteSpace: 'pre-wrap',
+          fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+        }}
+      >
+        {children}
+      </code>
+    )
+  ),
+  pre: ({ children }: any) => (
+    <pre
+      style={{
+        margin: '4px 0 0',
+        padding: '6px 8px',
+        borderRadius: 8,
+        background: 'rgba(0,0,0,0.12)',
+        overflowX: 'auto',
+      }}
+    >
+      {children}
+    </pre>
+  ),
+  h1: ({ children }: any) => <p style={{ margin: 0, fontWeight: 700, fontSize: '1.05em' }}>{children}</p>,
+  h2: ({ children }: any) => <p style={{ margin: 0, fontWeight: 700 }}>{children}</p>,
+  h3: ({ children }: any) => <p style={{ margin: 0, fontWeight: 700 }}>{children}</p>,
+  hr: () => <hr style={{ margin: '6px 0', border: 0, borderTop: `1px solid ${subtleColor}` }} />,
+  table: ({ children }: any) => (
+    <table
+      style={{
+        width: '100%',
+        marginTop: 4,
+        borderCollapse: 'collapse',
+        fontSize: '0.95em',
+      }}
+    >
+      {children}
+    </table>
+  ),
+  th: ({ children }: any) => (
+    <th style={{ textAlign: 'left', borderBottom: `1px solid ${subtleColor}`, padding: '2px 4px' }}>
+      {children}
+    </th>
+  ),
+  td: ({ children }: any) => (
+    <td style={{ borderBottom: `1px solid ${subtleColor}`, padding: '2px 4px', verticalAlign: 'top' }}>
+      {children}
+    </td>
+  ),
+});
 
 const estimateSubtreeWeight = (node: MindMapNode): number => {
   const children = node.children ?? [];
@@ -793,7 +925,15 @@ const NodeComponent = React.memo<NodeProps>(({
                     width: '100%',
                     textAlign: 'left',
                   }}>
-                    <ReactMarkdown>{node.data.content}</ReactMarkdown>
+                    <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
+                      components={createMarkdownComponents(
+                        textColor,
+                        hasLightText ? 'rgba(255,255,255,0.28)' : 'rgba(24,24,27,0.16)'
+                      )}
+                    >
+                      {node.data.content}
+                    </ReactMarkdown>
                   </div>
                 )}
               </div>
@@ -1531,13 +1671,13 @@ const MindMap: React.FC<MindMapProps> = ({
 
                 <div>
                   <label style={{ fontSize: 10, fontWeight: 600, color: t.chromeColor, letterSpacing: '0.05em', textTransform: 'uppercase', display: 'block', marginBottom: 6 }}>
-                    Notas
+                    Descricao em Markdown
                   </label>
                   <textarea
                     value={editContent}
                     onChange={e => setEditContent(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Escape') cancelEdit(); }}
-                    placeholder="Anotações em Markdown..."
+                    placeholder="Escreva a descricao com Markdown completo..."
                     rows={5}
                     style={{
                       width: '100%', boxSizing: 'border-box',

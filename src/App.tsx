@@ -474,7 +474,7 @@ export default function App() {
               <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 mt-4">Campos aceitos:</h3>
               <ul className="list-disc pl-5 space-y-2">
                 <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">title</code> (obrigatório): texto exibido no nó.</li>
-                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">content</code> (opcional): descrição em Markdown.</li>
+                <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">content</code> (opcional): descrição em Markdown completo.</li>
                 <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">children</code> (opcional): lista de filhos desse nó.</li>
                 <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">color</code> (opcional): na raiz define a cor principal; no primeiro nível define a cor da ramificação.</li>
                 <li><code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">id</code> (opcional): pode ser omitido. O app gera IDs automaticamente ao importar ou atualizar.</li>
@@ -483,6 +483,7 @@ export default function App() {
               <ul className="list-disc pl-5 space-y-2">
                 <li>Cores personalizadas só aparecem na raiz e nos filhos diretos da raiz.</li>
                 <li>A partir do segundo nível, a propriedade <code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">color</code> é ignorada.</li>
+                <li>O <code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">content</code> aceita listas, links, negrito, itálico, citações, blocos de código, riscado e tabelas.</li>
                 <li>O arquivo exportado pode incluir <code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">id</code> e <code className="bg-zinc-100 dark:bg-zinc-800 px-1.5 py-0.5 rounded text-indigo-600 dark:text-indigo-400">textColor</code>, mas você não precisa preencher esses campos manualmente.</li>
               </ul>
               <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 mt-4">Exemplo básico:</h3>
